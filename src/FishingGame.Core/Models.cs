@@ -26,6 +26,24 @@ namespace FishingGame.Core
         public string Description { get; set; }
         public bool IsHidden { get; set; }
         public double HiddenBaseChance { get; set; }
+        public int PreferredTension { get; set; }
+        public int TensionWindow { get; set; }
+        public int PullResistance { get; set; }
+        public int ReleaseSensitivity { get; set; }
+        public int TensionVolatility { get; set; }
+        public int RunStrength { get; set; }
+        public string IconSymbol { get; set; }
+    }
+
+    public class HiddenItem
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public string SceneId { get; set; }
+        public int BasePrice { get; set; }
+        public double HiddenBaseChance { get; set; }
+        public string Description { get; set; }
+        public string IconSymbol { get; set; }
     }
 
     public class Rod
@@ -58,9 +76,13 @@ namespace FishingGame.Core
         public string SceneId { get; set; }
         public string Rarity { get; set; }
         public bool IsHidden { get; set; }
+        public bool IsFish { get; set; }
         public double Weight { get; set; }
+        public string WeightGrade { get; set; }
+        public bool IsSellable { get; set; }
         public int SellPrice { get; set; }
         public string CaughtAt { get; set; }
+        public string IconSymbol { get; set; }
     }
 
     public class GameState
@@ -73,6 +95,7 @@ namespace FishingGame.Core
         public int AquariumTierIndex { get; set; }
         public List<CatchRecord> Aquarium { get; set; }
         public List<string> CollectionSpeciesIds { get; set; }
+        public List<string> ItemCollectionIds { get; set; }
         public string LastSignInDate { get; set; }
         public string LastTicketDate { get; set; }
 
@@ -83,9 +106,27 @@ namespace FishingGame.Core
             Bag = new List<CatchRecord>();
             Aquarium = new List<CatchRecord>();
             CollectionSpeciesIds = new List<string>();
+            ItemCollectionIds = new List<string>();
             LastSignInDate = "";
             LastTicketDate = "";
         }
     }
-}
 
+    public class TensionWindow
+    {
+        public int Low { get; set; }
+        public int High { get; set; }
+
+        public int Width
+        {
+            get { return High - Low; }
+        }
+    }
+
+    public class TensionActionProfile
+    {
+        public double PullAmount { get; set; }
+        public double ReleaseAmount { get; set; }
+        public double DriftAmount { get; set; }
+    }
+}

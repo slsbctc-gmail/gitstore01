@@ -9,6 +9,8 @@ namespace FishingGame.Core
         public static List<SceneInfo> Scenes { get; private set; }
         public static List<FishSpecies> AllFish { get; private set; }
         public static Dictionary<string, List<FishSpecies>> FishByScene { get; private set; }
+        public static List<HiddenItem> AllHiddenItems { get; private set; }
+        public static Dictionary<string, List<HiddenItem>> HiddenItemsByScene { get; private set; }
         public static List<Rod> Rods { get; private set; }
         public static List<AquariumTier> AquariumTiers { get; private set; }
 
@@ -19,6 +21,8 @@ namespace FishingGame.Core
             AquariumTiers = BuildAquariumTiers();
             AllFish = BuildFish();
             FishByScene = AllFish.GroupBy(f => f.SceneId).ToDictionary(g => g.Key, g => g.ToList());
+            AllHiddenItems = BuildHiddenItems();
+            HiddenItemsByScene = AllHiddenItems.GroupBy(i => i.SceneId).ToDictionary(g => g.Key, g => g.ToList());
         }
 
         public static SceneInfo FindScene(string id)
@@ -53,7 +57,7 @@ namespace FishingGame.Core
                 "#768f48", "#397faf", "#253d88", "#179895",
                 "#8bb9dc", "#334c73", "#0e2138", "#2c173a"
             };
-            int[] counts = { 52, 56, 60, 66, 70, 76, 80, 86, 90, 94, 98, 100 };
+            int[] counts = { 22, 30, 38, 46, 54, 62, 70, 78, 86, 92, 96, 100 };
             List<SceneInfo> scenes = new List<SceneInfo>();
             for (int i = 0; i < names.Length; i++)
             {
@@ -125,7 +129,14 @@ namespace FishingGame.Core
                         MaxWeight = Math.Round(1.0 + scene.Difficulty * 0.42 + (i % 9) * 0.3, 2),
                         Description = scene.Name + "中常被钓手记录的" + rarity + "鱼。",
                         IsHidden = false,
-                        HiddenBaseChance = 0
+                        HiddenBaseChance = 0,
+                        PreferredTension = 34 + (i * 11 + sceneIndex * 5) % 33,
+                        TensionWindow = Math.Max(7, 17 - sceneIndex / 2 - RarityDifficultyBonus(rarity) / 8),
+                        PullResistance = 2 + (i * 5 + sceneIndex * 2) % 13 + RarityDifficultyBonus(rarity) / 6,
+                        ReleaseSensitivity = 2 + (i * 7 + sceneIndex) % 14,
+                        TensionVolatility = 2 + (i * 3 + sceneIndex * 2) % 13 + RarityDifficultyBonus(rarity) / 5,
+                        RunStrength = 2 + (i * 9 + sceneIndex) % 14 + scene.Difficulty / 2,
+                        IconSymbol = "鱼"
                     });
                 }
 
@@ -144,12 +155,52 @@ namespace FishingGame.Core
                         MaxWeight = Math.Round(5.0 + scene.Difficulty * 1.6 + h * 2, 2),
                         Description = "只在" + scene.Name + "极少现身的隐藏鱼。",
                         IsHidden = true,
-                        HiddenBaseChance = Math.Max(0.0005, 0.004 - sceneIndex * 0.00028)
+                        HiddenBaseChance = Math.Max(0.0005, 0.004 - sceneIndex * 0.00028),
+                        PreferredTension = 42 + (sceneIndex * 7 + h * 13) % 24,
+                        TensionWindow = Math.Max(5, 10 - sceneIndex / 4),
+                        PullResistance = 13 + sceneIndex + h * 3,
+                        ReleaseSensitivity = 8 + sceneIndex % 8 + h * 2,
+                        TensionVolatility = 14 + sceneIndex + h * 3,
+                        RunStrength = 15 + sceneIndex + h * 4,
+                        IconSymbol = "秘"
                     });
                 }
             }
 
             return fish;
+        }
+
+        private static List<HiddenItem> BuildHiddenItems()
+        {
+            string[] itemNames = {
+                "旧手表", "河心宝石", "进水手机", "银戒指", "古铜钱", "珍珠胸针",
+                "怀旧相机", "翡翠扣", "船长罗盘", "夜光贝", "蓝晶石", "密封钱包"
+            };
+            string[] icons = { "表", "宝", "机", "戒", "钱", "针", "相", "翠", "盘", "贝", "晶", "包" };
+            string[] sceneTokens = {
+                "晴溪", "荷塘", "柳河", "雾湖", "苇泽", "海港",
+                "月湾", "珊瑚", "冰峡", "风暴", "深渊", "龙潮"
+            };
+            List<HiddenItem> items = new List<HiddenItem>();
+            for (int sceneIndex = 0; sceneIndex < Scenes.Count; sceneIndex++)
+            {
+                int count = sceneIndex < 6 ? 2 : 3;
+                for (int i = 0; i < count; i++)
+                {
+                    int itemIndex = i == 0 ? sceneIndex % 3 : (sceneIndex * 3 + i) % itemNames.Length;
+                    items.Add(new HiddenItem
+                    {
+                        Id = Scenes[sceneIndex].Id + "-item-" + (i + 1).ToString("00"),
+                        Name = sceneTokens[sceneIndex] + itemNames[itemIndex],
+                        SceneId = Scenes[sceneIndex].Id,
+                        BasePrice = 90 + sceneIndex * 75 + i * 55,
+                        HiddenBaseChance = Math.Max(0.001, 0.012 - sceneIndex * 0.00055 + i * 0.0005),
+                        Description = "从" + Scenes[sceneIndex].Name + "钓起的非鱼类隐藏物品，可出售换金币。",
+                        IconSymbol = icons[itemIndex]
+                    });
+                }
+            }
+            return items;
         }
 
         private static string RarityForIndex(int index, int count)
@@ -237,4 +288,3 @@ namespace FishingGame.Core
         }
     }
 }
-

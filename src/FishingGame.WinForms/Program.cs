@@ -55,7 +55,9 @@ namespace FishingGame.WinForms
         private Timer _fishingTimer;
 
         private FishSpecies _activeFish;
+        private HiddenItem _activeItem;
         private CatchRecord _pendingCatch;
+        private TensionActionProfile _actionProfile;
         private double _tension;
         private double _catchProgress;
         private int _safeLow;
@@ -93,12 +95,12 @@ namespace FishingGame.WinForms
         {
             if (_isFishing && e.KeyCode == Keys.Space)
             {
-                AdjustTension(10);
+                PullLine();
                 e.Handled = true;
             }
             if (_isFishing && (e.KeyCode == Keys.Down || e.KeyCode == Keys.S))
             {
-                AdjustTension(-10);
+                ReleaseLine();
                 e.Handled = true;
             }
             base.OnKeyDown(e);
@@ -201,14 +203,23 @@ namespace FishingGame.WinForms
 
             _castButton = ActionButton("抛竿");
             _castButton.Click += delegate { CastLine(); };
-            _pullButton = ActionButton("拉线 Space");
-            _pullButton.Click += delegate { AdjustTension(12); };
-            _releaseButton = ActionButton("放线 S/↓");
-            _releaseButton.Click += delegate { AdjustTension(-12); };
 
-            right.Controls.Add(_releaseButton);
-            right.Controls.Add(_pullButton);
+            FlowLayoutPanel lineControls = new FlowLayoutPanel();
+            lineControls.Dock = DockStyle.Top;
+            lineControls.Height = 96;
+            lineControls.FlowDirection = FlowDirection.LeftToRight;
+            lineControls.WrapContents = false;
+            lineControls.Padding = new Padding(18, 8, 8, 8);
+            lineControls.BackColor = Color.FromArgb(248, 250, 249);
+            _pullButton = CircleButton("拉线\nSpace", Color.FromArgb(229, 91, 73));
+            _pullButton.Click += delegate { PullLine(); };
+            _releaseButton = CircleButton("放线\nS/↓", Color.FromArgb(62, 139, 210));
+            _releaseButton.Click += delegate { ReleaseLine(); };
+            lineControls.Controls.Add(_pullButton);
+            lineControls.Controls.Add(_releaseButton);
+
             right.Controls.Add(_castButton);
+            right.Controls.Add(lineControls);
             right.Controls.Add(_progressBar);
             right.Controls.Add(_tensionBar);
             right.Controls.Add(_sceneInfoLabel);
@@ -389,7 +400,16 @@ namespace FishingGame.WinForms
                 string name = fish.IsHidden && !caught ? "未知隐藏鱼" : fish.Name;
                 string marker = caught ? "√ " : "· ";
                 string hidden = fish.IsHidden ? "【隐藏】" : "";
-                _collectionList.Items.Add(marker + name + hidden + "  " + fish.Rarity + "  售价约" + fish.BasePrice);
+                string icon = fish.IsHidden ? "秘" : fish.IconSymbol;
+                _collectionList.Items.Add(marker + icon + " " + name + hidden + "  " + fish.Rarity + "  " + fish.MinWeight + "-" + fish.MaxWeight + "kg");
+            }
+            _collectionList.Items.Add("── 隐藏物品 ──");
+            foreach (HiddenItem item in GameData.HiddenItemsByScene[scene.Id])
+            {
+                bool caught = _state.ItemCollectionIds.Contains(item.Id);
+                string marker = caught ? "√ " : "· ";
+                string name = caught ? item.Name : "未知隐藏物品";
+                _collectionList.Items.Add(marker + item.IconSymbol + " " + name + "  价值约" + item.BasePrice);
             }
             _collectionList.EndUpdate();
         }
@@ -454,14 +474,28 @@ namespace FishingGame.WinForms
             }
 
             Rod rod = GameData.FindRod(_state.EquippedRodId);
+            _activeItem = GameRules.ChooseHiddenItem(_state, _currentSceneId, _random);
+            if (_activeItem != null)
+            {
+                CatchRecord itemCatch = GameRules.CreateItemCatch(_activeItem);
+                int bonus = GameRules.RegisterCatch(_state, itemCatch);
+                _catchLabel.Text = "钩到了隐藏物品：" + itemCatch.IconSymbol + " " + itemCatch.SpeciesName;
+                SetStatus("隐藏物品进入背包，可出售获得 " + itemCatch.SellPrice + " 金币。首次发现奖励 " + bonus + " 金币。");
+                _activeItem = null;
+                RefreshAll();
+                return;
+            }
+
             _activeFish = GameRules.ChooseFish(_state, _currentSceneId, _random);
             _pendingCatch = GameRules.CreateCatch(_activeFish, _random);
+            _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
+            TensionWindow window = GameRules.CalculateTensionWindow(_activeFish, rod);
             _tension = 50;
             _catchProgress = 0;
-            _safeLow = Math.Max(18, 38 - rod.Control / 8);
-            _safeHigh = Math.Min(82, 62 + rod.Control / 8);
+            _safeLow = window.Low;
+            _safeHigh = window.High;
             _isFishing = true;
-            _catchLabel.Text = "鱼咬钩了！保持张力在安全区。";
+            _catchLabel.Text = "鱼咬钩了！保持张力在 " + _safeLow + "-" + _safeHigh + "。";
             SetStatus("正在钓鱼：Space 拉线，S 或 ↓ 放线。");
             _fishingTimer.Start();
             RefreshFishingControls();
@@ -471,19 +505,22 @@ namespace FishingGame.WinForms
         {
             if (!_isFishing || _activeFish == null) return;
             Rod rod = GameData.FindRod(_state.EquippedRodId);
-            double fishPull = _activeFish.Difficulty / 42.0;
-            double control = rod.Control / 70.0;
-            double stability = rod.Stability / 100.0;
-            double drift = (_random.NextDouble() - 0.44) * (8.5 - Math.Min(3.0, stability)) + fishPull - control;
+            if (_actionProfile == null)
+            {
+                _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
+            }
+            double fishPull = _activeFish.RunStrength / 15.0;
+            double control = rod.Control / 95.0;
+            double drift = (_random.NextDouble() - 0.43) * _actionProfile.DriftAmount + fishPull - control;
             _tension += drift;
 
             if (_tension >= _safeLow && _tension <= _safeHigh)
             {
-                _catchProgress += 2.1 + rod.Power / 36.0;
+                _catchProgress += 1.8 + rod.Power / 42.0 + Math.Max(0, _safeHigh - _safeLow) / 55.0;
             }
             else
             {
-                _catchProgress -= 2.8 + _activeFish.Difficulty / 80.0;
+                _catchProgress -= 2.4 + _activeFish.TensionVolatility / 9.0;
             }
 
             if (_catchProgress < 0) _catchProgress = 0;
@@ -498,6 +535,22 @@ namespace FishingGame.WinForms
                 return;
             }
             RefreshFishingControls();
+        }
+
+        private void PullLine()
+        {
+            if (!_isFishing || _activeFish == null) return;
+            Rod rod = GameData.FindRod(_state.EquippedRodId);
+            TensionActionProfile profile = _actionProfile ?? GameRules.CalculateActionProfile(_activeFish, rod);
+            AdjustTension(profile.PullAmount);
+        }
+
+        private void ReleaseLine()
+        {
+            if (!_isFishing || _activeFish == null) return;
+            Rod rod = GameData.FindRod(_state.EquippedRodId);
+            TensionActionProfile profile = _actionProfile ?? GameRules.CalculateActionProfile(_activeFish, rod);
+            AdjustTension(-profile.ReleaseAmount);
         }
 
         private void AdjustTension(double amount)
@@ -517,8 +570,16 @@ namespace FishingGame.WinForms
             {
                 int bonus = GameRules.RegisterCatch(_state, _pendingCatch);
                 string hidden = _pendingCatch.IsHidden ? "隐藏鱼！" : "";
-                _catchLabel.Text = "钓到了 " + _pendingCatch.SpeciesName + " " + hidden + " 重 " + _pendingCatch.Weight + "kg";
-                SetStatus("收入：鱼进入背包，首次图鉴奖励 " + bonus + " 金币。");
+                if (!_pendingCatch.IsSellable)
+                {
+                    _catchLabel.Text = "钓到了偏小的 " + _pendingCatch.SpeciesName + "，已放生。";
+                    SetStatus("小鱼不能售卖，已直接放掉。首次图鉴奖励 " + bonus + " 金币。");
+                }
+                else
+                {
+                    _catchLabel.Text = "钓到了 " + _pendingCatch.WeightGrade + " " + _pendingCatch.SpeciesName + " " + hidden + " 重 " + _pendingCatch.Weight + "kg";
+                    SetStatus("鱼进入背包，售价 " + _pendingCatch.SellPrice + " 金币。首次图鉴奖励 " + bonus + " 金币。");
+                }
                 Save();
             }
             else
@@ -527,7 +588,9 @@ namespace FishingGame.WinForms
                 SetStatus("张力失控，鱼跑掉了。换更高控制的鱼竿会轻松些。");
             }
             _activeFish = null;
+            _activeItem = null;
             _pendingCatch = null;
+            _actionProfile = null;
             _tension = 0;
             _catchProgress = 0;
             RefreshAll();
@@ -632,8 +695,12 @@ namespace FishingGame.WinForms
 
         private string FormatCatch(CatchRecord item)
         {
+            if (!item.IsFish)
+            {
+                return item.IconSymbol + " " + item.SpeciesName + "  隐藏物品  售价" + item.SellPrice;
+            }
             string hidden = item.IsHidden ? "【隐藏】" : "";
-            return item.SpeciesName + hidden + "  " + item.Rarity + "  " + item.Weight + "kg  售价" + item.SellPrice;
+            return item.IconSymbol + " " + item.SpeciesName + hidden + "  " + item.Rarity + "  " + item.WeightGrade + "  " + item.Weight + "kg  售价" + item.SellPrice;
         }
 
         private static int ClampToProgress(double value)
@@ -682,6 +749,20 @@ namespace FishingGame.WinForms
             button.Margin = new Padding(4);
             return button;
         }
+
+        private Button CircleButton(string text, Color color)
+        {
+            RoundButton button = new RoundButton();
+            button.Text = text;
+            button.CircleColor = color;
+            button.ForeColor = Color.White;
+            button.Width = 78;
+            button.Height = 78;
+            button.Margin = new Padding(8, 0, 8, 0);
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            return button;
+        }
     }
 
     internal class DisplayItem<T>
@@ -698,6 +779,44 @@ namespace FishingGame.WinForms
         public override string ToString()
         {
             return Text;
+        }
+    }
+
+    internal class RoundButton : Button
+    {
+        public Color CircleColor { get; set; }
+
+        public RoundButton()
+        {
+            CircleColor = Color.FromArgb(70, 130, 180);
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            GraphicsPath path = new GraphicsPath();
+            path.AddEllipse(2, 2, Width - 4, Height - 4);
+            Region = new Region(path);
+        }
+
+        protected override void OnPaint(PaintEventArgs pevent)
+        {
+            Graphics g = pevent.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle rect = new Rectangle(3, 3, Width - 6, Height - 6);
+            Color fill = Enabled ? CircleColor : Color.FromArgb(150, 150, 150);
+            using (LinearGradientBrush brush = new LinearGradientBrush(rect, ControlPaint.Light(fill), ControlPaint.Dark(fill), LinearGradientMode.ForwardDiagonal))
+            using (Pen pen = new Pen(Color.FromArgb(90, Color.White), 2F))
+            using (Brush text = new SolidBrush(ForeColor))
+            using (StringFormat format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                g.FillEllipse(brush, rect);
+                g.DrawEllipse(pen, rect);
+                g.DrawString(Text, Font, text, rect, format);
+            }
         }
     }
 
@@ -732,10 +851,263 @@ namespace FishingGame.WinForms
                 g.FillRectangle(brush, bounds);
             }
 
+            DrawScenery(g, bounds);
             DrawWaves(g, bounds);
             DrawFishShadows(g, bounds);
             DrawDock(g, bounds);
             DrawFishingState(g, bounds);
+        }
+
+        private void DrawScenery(Graphics g, Rectangle bounds)
+        {
+            int difficulty = Scene == null ? 1 : Scene.Difficulty;
+            DrawSkyLight(g, bounds, difficulty);
+
+            if (difficulty <= 3)
+            {
+                DrawHills(g, bounds, Color.FromArgb(120, 67, 142, 95), Color.FromArgb(150, 39, 111, 76));
+                DrawReeds(g, bounds, difficulty == 2 ? 30 : 12);
+            }
+            else if (difficulty <= 5)
+            {
+                DrawHills(g, bounds, Color.FromArgb(120, 95, 115, 126), Color.FromArgb(150, 74, 93, 96));
+                DrawMist(g, bounds);
+                DrawReeds(g, bounds, 34);
+            }
+            else if (difficulty == 6)
+            {
+                DrawPier(g, bounds);
+                DrawBoats(g, bounds);
+            }
+            else if (difficulty == 7)
+            {
+                DrawMoon(g, bounds);
+                DrawHills(g, bounds, Color.FromArgb(130, 28, 40, 98), Color.FromArgb(160, 22, 31, 73));
+            }
+            else if (difficulty == 8)
+            {
+                DrawCoral(g, bounds);
+            }
+            else if (difficulty == 9)
+            {
+                DrawIce(g, bounds);
+            }
+            else if (difficulty == 10)
+            {
+                DrawStorm(g, bounds);
+            }
+            else if (difficulty == 11)
+            {
+                DrawAbyss(g, bounds);
+            }
+            else
+            {
+                DrawDragonTide(g, bounds);
+            }
+        }
+
+        private void DrawSkyLight(Graphics g, Rectangle bounds, int difficulty)
+        {
+            if (difficulty == 7 || difficulty >= 10)
+            {
+                using (Brush star = new SolidBrush(Color.FromArgb(160, Color.White)))
+                {
+                    for (int i = 0; i < 24; i++)
+                    {
+                        int x = 28 + (i * 83) % Math.Max(80, bounds.Width - 56);
+                        int y = 22 + (i * 47) % Math.Max(70, bounds.Height / 2);
+                        g.FillEllipse(star, x, y, 2, 2);
+                    }
+                }
+                return;
+            }
+
+            using (GraphicsPath path = new GraphicsPath())
+            using (PathGradientBrush glow = new PathGradientBrush(path))
+            {
+                path.AddEllipse(bounds.Width - 150, 28, 96, 96);
+                glow.CenterColor = Color.FromArgb(210, 255, 232, 138);
+                glow.SurroundColors = new[] { Color.FromArgb(0, 255, 232, 138) };
+                g.FillPath(glow, path);
+            }
+        }
+
+        private void DrawHills(Graphics g, Rectangle bounds, Color back, Color front)
+        {
+            using (Brush b1 = new SolidBrush(back))
+            using (Brush b2 = new SolidBrush(front))
+            {
+                Point[] far = {
+                    new Point(0, bounds.Height / 3),
+                    new Point(bounds.Width / 5, bounds.Height / 5),
+                    new Point(bounds.Width / 2, bounds.Height / 3),
+                    new Point(bounds.Width * 3 / 4, bounds.Height / 6),
+                    new Point(bounds.Width, bounds.Height / 3),
+                    new Point(bounds.Width, bounds.Height),
+                    new Point(0, bounds.Height)
+                };
+                Point[] near = {
+                    new Point(0, bounds.Height / 2),
+                    new Point(bounds.Width / 4, bounds.Height / 3),
+                    new Point(bounds.Width / 2, bounds.Height / 2),
+                    new Point(bounds.Width * 4 / 5, bounds.Height / 3),
+                    new Point(bounds.Width, bounds.Height / 2),
+                    new Point(bounds.Width, bounds.Height),
+                    new Point(0, bounds.Height)
+                };
+                g.FillPolygon(b1, far);
+                g.FillPolygon(b2, near);
+            }
+        }
+
+        private void DrawReeds(Graphics g, Rectangle bounds, int count)
+        {
+            using (Pen reed = new Pen(Color.FromArgb(160, 64, 94, 45), 3F))
+            using (Brush tip = new SolidBrush(Color.FromArgb(180, 116, 82, 42)))
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    int x = 10 + (i * 37) % Math.Max(40, bounds.Width - 20);
+                    int y = bounds.Height - 78 - (i % 5) * 7;
+                    g.DrawLine(reed, x, bounds.Height - 38, x + (i % 3 - 1) * 8, y);
+                    g.FillEllipse(tip, x - 4, y - 8, 8, 16);
+                }
+            }
+        }
+
+        private void DrawMist(Graphics g, Rectangle bounds)
+        {
+            using (Brush mist = new SolidBrush(Color.FromArgb(75, Color.White)))
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    g.FillEllipse(mist, -80 + i * 180, 70 + i % 2 * 34, 240, 42);
+                }
+            }
+        }
+
+        private void DrawPier(Graphics g, Rectangle bounds)
+        {
+            using (Brush wood = new SolidBrush(Color.FromArgb(170, 125, 85, 49)))
+            using (Pen edge = new Pen(Color.FromArgb(180, 82, 50, 31), 4F))
+            {
+                Point[] pier = {
+                    new Point(bounds.Width / 2 - 90, bounds.Height / 2),
+                    new Point(bounds.Width / 2 + 90, bounds.Height / 2),
+                    new Point(bounds.Width / 2 + 190, bounds.Height - 58),
+                    new Point(bounds.Width / 2 - 190, bounds.Height - 58)
+                };
+                g.FillPolygon(wood, pier);
+                g.DrawPolygon(edge, pier);
+            }
+        }
+
+        private void DrawBoats(Graphics g, Rectangle bounds)
+        {
+            using (Brush hull = new SolidBrush(Color.FromArgb(170, 70, 48, 38)))
+            using (Brush sail = new SolidBrush(Color.FromArgb(200, 246, 242, 220)))
+            {
+                g.FillPie(hull, 58, bounds.Height / 2 + 24, 110, 44, 0, 180);
+                Point[] sailShape = { new Point(112, bounds.Height / 2 - 24), new Point(112, bounds.Height / 2 + 28), new Point(154, bounds.Height / 2 + 18) };
+                g.FillPolygon(sail, sailShape);
+            }
+        }
+
+        private void DrawMoon(Graphics g, Rectangle bounds)
+        {
+            using (Brush moon = new SolidBrush(Color.FromArgb(230, 246, 240, 190)))
+            using (Brush cut = new SolidBrush(Color.FromArgb(98, 116, 176)))
+            {
+                g.FillEllipse(moon, bounds.Width - 140, 42, 70, 70);
+                g.FillEllipse(cut, bounds.Width - 118, 34, 70, 70);
+            }
+        }
+
+        private void DrawCoral(Graphics g, Rectangle bounds)
+        {
+            Color[] colors = { Color.Coral, Color.DeepPink, Color.Gold, Color.MediumPurple, Color.LightSeaGreen };
+            for (int i = 0; i < 16; i++)
+            {
+                using (Pen pen = new Pen(Color.FromArgb(185, colors[i % colors.Length]), 5F))
+                {
+                    int x = 24 + i * bounds.Width / 16;
+                    int y = bounds.Height - 78;
+                    g.DrawLine(pen, x, y, x + (i % 3 - 1) * 12, y - 36 - i % 4 * 8);
+                    g.DrawLine(pen, x, y - 18, x + 18, y - 42);
+                    g.DrawLine(pen, x, y - 16, x - 16, y - 38);
+                }
+            }
+        }
+
+        private void DrawIce(Graphics g, Rectangle bounds)
+        {
+            using (Brush ice = new SolidBrush(Color.FromArgb(150, 230, 250, 255)))
+            using (Pen edge = new Pen(Color.FromArgb(180, 172, 218, 239), 2F))
+            {
+                for (int i = 0; i < 7; i++)
+                {
+                    Point[] floe = {
+                        new Point(30 + i * 120, bounds.Height - 126),
+                        new Point(86 + i * 120, bounds.Height - 146),
+                        new Point(134 + i * 120, bounds.Height - 118),
+                        new Point(98 + i * 120, bounds.Height - 96),
+                        new Point(44 + i * 120, bounds.Height - 102)
+                    };
+                    g.FillPolygon(ice, floe);
+                    g.DrawPolygon(edge, floe);
+                }
+            }
+        }
+
+        private void DrawStorm(Graphics g, Rectangle bounds)
+        {
+            using (Pen rain = new Pen(Color.FromArgb(120, Color.White), 2F))
+            using (Pen lightning = new Pen(Color.FromArgb(230, 255, 232, 80), 4F))
+            {
+                for (int i = 0; i < 42; i++)
+                {
+                    int x = (i * 47) % Math.Max(80, bounds.Width);
+                    int y = 20 + (i * 29) % Math.Max(100, bounds.Height - 100);
+                    g.DrawLine(rain, x, y, x - 18, y + 34);
+                }
+                Point[] bolt = {
+                    new Point(bounds.Width / 2 + 80, 40),
+                    new Point(bounds.Width / 2 + 42, 108),
+                    new Point(bounds.Width / 2 + 74, 108),
+                    new Point(bounds.Width / 2 + 28, 188)
+                };
+                g.DrawLines(lightning, bolt);
+            }
+        }
+
+        private void DrawAbyss(Graphics g, Rectangle bounds)
+        {
+            using (Brush glow = new SolidBrush(Color.FromArgb(110, 60, 220, 210)))
+            using (Pen vent = new Pen(Color.FromArgb(130, 200, 240, 255), 3F))
+            {
+                for (int i = 0; i < 9; i++)
+                {
+                    int x = 42 + i * bounds.Width / 9;
+                    int y = bounds.Height - 105 - (i % 3) * 22;
+                    g.FillEllipse(glow, x, y, 20, 20);
+                    g.DrawLine(vent, x + 10, y + 14, x + 10, y - 30);
+                }
+            }
+        }
+
+        private void DrawDragonTide(Graphics g, Rectangle bounds)
+        {
+            using (Pen dragon = new Pen(Color.FromArgb(170, 255, 205, 92), 8F))
+            using (Brush eye = new SolidBrush(Color.FromArgb(230, 255, 80, 60)))
+            {
+                Point[] body = new Point[7];
+                for (int i = 0; i < body.Length; i++)
+                {
+                    body[i] = new Point(70 + i * bounds.Width / 8, 130 + (i % 2 == 0 ? 28 : -22));
+                }
+                g.DrawCurve(dragon, body);
+                g.FillEllipse(eye, body[body.Length - 1].X + 18, body[body.Length - 1].Y - 12, 10, 10);
+            }
         }
 
         private void DrawWaves(Graphics g, Rectangle bounds)
@@ -834,4 +1206,3 @@ namespace FishingGame.WinForms
         }
     }
 }
-
