@@ -73,3 +73,4 @@ powershell -ExecutionPolicy Bypass -File .\build.ps1 -TestOnly
 - 鱼缸容量限制。
 - 门票每天只能收取一次。
 - JSON 存档回读。
+- UI 烟测会把所有场景绘制到内存图像，防止 WinForms 红叉和绘图异常回归。

@@ -24,6 +24,8 @@ if (Test-Path $CoreDir) {
 
 $TestSource = Join-Path $TestsDir "CoreTests.cs"
 $TestExe = Join-Path $Dist "CoreTests.exe"
+$UiTestSource = Join-Path $TestsDir "UiSmokeTests.cs"
+$UiTestExe = Join-Path $Dist "UiSmokeTests.exe"
 
 & $Csc /nologo /utf8output /codepage:65001 /target:exe /out:$TestExe /reference:System.Core.dll /reference:System.Web.Extensions.dll $CoreSources $TestSource
 if ($LASTEXITCODE -ne 0) {
@@ -48,6 +50,23 @@ $AppExe = Join-Path $Dist "FishingGame.exe"
 & $Csc /nologo /utf8output /codepage:65001 /target:winexe /out:$AppExe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll $CoreSources $AppSources
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
+}
+
+$AppLocalCopy = Join-Path $Dist "FishingGame.exe"
+& $Csc /nologo /utf8output /codepage:65001 /target:exe /out:$UiTestExe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:$AppLocalCopy $UiTestSource
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+Push-Location $Dist
+try {
+    & $UiTestExe
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+finally {
+    Pop-Location
 }
 
 Write-Output "Built $AppExe"

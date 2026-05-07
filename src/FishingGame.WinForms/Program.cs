@@ -211,9 +211,9 @@ namespace FishingGame.WinForms
             lineControls.WrapContents = false;
             lineControls.Padding = new Padding(18, 8, 8, 8);
             lineControls.BackColor = Color.FromArgb(248, 250, 249);
-            _pullButton = CircleButton("拉线\nSpace", Color.FromArgb(229, 91, 73));
+            _pullButton = CircleButton("拉线\nSpace", "↑", Color.FromArgb(229, 91, 73));
             _pullButton.Click += delegate { PullLine(); };
-            _releaseButton = CircleButton("放线\nS/↓", Color.FromArgb(62, 139, 210));
+            _releaseButton = CircleButton("放线\nS/↓", "↓", Color.FromArgb(62, 139, 210));
             _releaseButton.Click += delegate { ReleaseLine(); };
             lineControls.Controls.Add(_pullButton);
             lineControls.Controls.Add(_releaseButton);
@@ -750,10 +750,11 @@ namespace FishingGame.WinForms
             return button;
         }
 
-        private Button CircleButton(string text, Color color)
+        private Button CircleButton(string text, string symbol, Color color)
         {
             RoundButton button = new RoundButton();
             button.Text = text;
+            button.Symbol = symbol;
             button.CircleColor = color;
             button.ForeColor = Color.White;
             button.Width = 78;
@@ -785,10 +786,12 @@ namespace FishingGame.WinForms
     internal class RoundButton : Button
     {
         public Color CircleColor { get; set; }
+        public string Symbol { get; set; }
 
         public RoundButton()
         {
             CircleColor = Color.FromArgb(70, 130, 180);
+            Symbol = "";
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
         }
 
@@ -809,13 +812,18 @@ namespace FishingGame.WinForms
             using (LinearGradientBrush brush = new LinearGradientBrush(rect, ControlPaint.Light(fill), ControlPaint.Dark(fill), LinearGradientMode.ForwardDiagonal))
             using (Pen pen = new Pen(Color.FromArgb(90, Color.White), 2F))
             using (Brush text = new SolidBrush(ForeColor))
+            using (Font symbolFont = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold))
+            using (Font labelFont = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
             using (StringFormat format = new StringFormat())
             {
                 format.Alignment = StringAlignment.Center;
                 format.LineAlignment = StringAlignment.Center;
                 g.FillEllipse(brush, rect);
                 g.DrawEllipse(pen, rect);
-                g.DrawString(Text, Font, text, rect, format);
+                Rectangle symbolRect = new Rectangle(rect.Left, rect.Top + 8, rect.Width, 28);
+                Rectangle labelRect = new Rectangle(rect.Left, rect.Top + 35, rect.Width, 32);
+                g.DrawString(Symbol, symbolFont, text, symbolRect, format);
+                g.DrawString(Text, labelFont, text, labelRect, format);
             }
         }
     }
@@ -923,12 +931,14 @@ namespace FishingGame.WinForms
             }
 
             using (GraphicsPath path = new GraphicsPath())
-            using (PathGradientBrush glow = new PathGradientBrush(path))
             {
                 path.AddEllipse(bounds.Width - 150, 28, 96, 96);
-                glow.CenterColor = Color.FromArgb(210, 255, 232, 138);
-                glow.SurroundColors = new[] { Color.FromArgb(0, 255, 232, 138) };
-                g.FillPath(glow, path);
+                using (PathGradientBrush glow = new PathGradientBrush(path))
+                {
+                    glow.CenterColor = Color.FromArgb(210, 255, 232, 138);
+                    glow.SurroundColors = new[] { Color.FromArgb(0, 255, 232, 138) };
+                    g.FillPath(glow, path);
+                }
             }
         }
 
