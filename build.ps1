@@ -25,7 +25,7 @@ if (Test-Path $CoreDir) {
 $TestSource = Join-Path $TestsDir "CoreTests.cs"
 $TestExe = Join-Path $Dist "CoreTests.exe"
 
-& $Csc /nologo /target:exe /out:$TestExe /reference:System.Core.dll /reference:System.Web.Extensions.dll $CoreSources $TestSource
+& $Csc /nologo /utf8output /codepage:65001 /target:exe /out:$TestExe /reference:System.Core.dll /reference:System.Web.Extensions.dll $CoreSources $TestSource
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
@@ -45,10 +45,9 @@ if (Test-Path $AppDir) {
 }
 
 $AppExe = Join-Path $Dist "FishingGame.exe"
-& $Csc /nologo /target:winexe /out:$AppExe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll $CoreSources $AppSources
+& $Csc /nologo /utf8output /codepage:65001 /target:winexe /out:$AppExe /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll $CoreSources $AppSources
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
 Write-Output "Built $AppExe"
-
