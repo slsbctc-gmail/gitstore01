@@ -33,6 +33,8 @@ namespace FishingGame.Core
             if (state.UnlockedSceneIds.Count == 0) state.UnlockedSceneIds.Add(GameData.Scenes[0].Id);
             if (state.AquariumTierIndex < 0) state.AquariumTierIndex = 0;
             if (state.AquariumTierIndex >= GameData.AquariumTiers.Count) state.AquariumTierIndex = GameData.AquariumTiers.Count - 1;
+            NormalizeCatchPrices(state.Bag);
+            NormalizeCatchPrices(state.Aquarium);
         }
 
         public static double HiddenChanceForRod(FishSpecies fish, Rod rod)
@@ -147,7 +149,7 @@ namespace FishingGame.Core
             {
                 grade = "一般";
                 sellable = true;
-                sellPrice = Math.Max(1, (int)Math.Round(fish.BasePrice * (0.75 + ratio * 0.7)));
+                sellPrice = Math.Max(1, (int)Math.Round(MarketPriceForWeight(fish, weight) * (0.75 + ratio * 0.7)));
             }
             else
             {
@@ -155,7 +157,7 @@ namespace FishingGame.Core
                 sellable = true;
                 double trophyRatio = (ratio - 0.86) / 0.14;
                 double multiplier = 2.5 + ClampDouble(trophyRatio, 0, 1) * 7.5;
-                sellPrice = Math.Max(1, (int)Math.Round(fish.BasePrice * multiplier));
+                sellPrice = Math.Max(1, (int)Math.Round(MarketPriceForWeight(fish, weight) * multiplier));
             }
 
             return new CatchRecord
@@ -396,6 +398,35 @@ namespace FishingGame.Core
             if (rarity == "史诗") return 22;
             if (rarity == "传说") return 40;
             return 0;
+        }
+
+        private static void NormalizeCatchPrices(List<CatchRecord> catches)
+        {
+            if (catches == null) return;
+            foreach (CatchRecord catchRecord in catches.Where(c => c != null && c.IsFish))
+            {
+                FishSpecies fish = GameData.AllFish.FirstOrDefault(f => f.Id == catchRecord.SpeciesId);
+                if (fish == null) continue;
+                CatchRecord priced = CreateCatchForWeight(fish, catchRecord.Weight);
+                catchRecord.WeightGrade = priced.WeightGrade;
+                catchRecord.IsSellable = priced.IsSellable;
+                catchRecord.SellPrice = priced.SellPrice;
+                catchRecord.IconSymbol = priced.IconSymbol;
+            }
+        }
+
+        private static double MarketPriceForWeight(FishSpecies fish, double weight)
+        {
+            return fish.BasePrice * Math.Max(0.2, weight) * RaritySaleMultiplier(fish.Rarity);
+        }
+
+        private static double RaritySaleMultiplier(string rarity)
+        {
+            if (rarity == "优秀") return 1.55;
+            if (rarity == "稀有") return 2.2;
+            if (rarity == "史诗") return 3.2;
+            if (rarity == "传说") return 4.2;
+            return 1.0;
         }
 
         private static double WeightRatio(FishSpecies fish, double weight)

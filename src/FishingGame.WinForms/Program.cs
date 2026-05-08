@@ -38,11 +38,7 @@ namespace FishingGame.WinForms
         private ListBox _aquariumList;
         private ListBox _collectionList;
         private ListBox _rodList;
-        private ProgressBar _tensionBar;
-        private ProgressBar _progressBar;
         private Button _castButton;
-        private Button _pullButton;
-        private Button _releaseButton;
         private Button _signButton;
         private Button _sellButton;
         private Button _toAquariumButton;
@@ -52,11 +48,13 @@ namespace FishingGame.WinForms
         private Button _buyAquariumButton;
         private Button _ticketsButton;
         private WaterPanel _waterPanel;
+        private ReelControl _reelControl;
         private Timer _fishingTimer;
 
         private FishSpecies _activeFish;
         private HiddenItem _activeItem;
         private CatchRecord _pendingCatch;
+        private CatchRecord _lastCatch;
         private TensionActionProfile _actionProfile;
         private double _tension;
         private double _catchProgress;
@@ -194,34 +192,17 @@ namespace FishingGame.WinForms
             _sceneInfoLabel.Padding = new Padding(4);
             _sceneInfoLabel.BackColor = Color.FromArgb(235, 244, 246);
 
-            _tensionBar = new ProgressBar();
-            _tensionBar.Dock = DockStyle.Top;
-            _tensionBar.Height = 28;
-            _progressBar = new ProgressBar();
-            _progressBar.Dock = DockStyle.Top;
-            _progressBar.Height = 28;
-
             _castButton = ActionButton("抛竿");
             _castButton.Click += delegate { CastLine(); };
 
-            FlowLayoutPanel lineControls = new FlowLayoutPanel();
-            lineControls.Dock = DockStyle.Top;
-            lineControls.Height = 96;
-            lineControls.FlowDirection = FlowDirection.LeftToRight;
-            lineControls.WrapContents = false;
-            lineControls.Padding = new Padding(18, 8, 8, 8);
-            lineControls.BackColor = Color.FromArgb(248, 250, 249);
-            _pullButton = CircleButton("拉线\nSpace", "↑", Color.FromArgb(229, 91, 73));
-            _pullButton.Click += delegate { PullLine(); };
-            _releaseButton = CircleButton("放线\nS/↓", "↓", Color.FromArgb(62, 139, 210));
-            _releaseButton.Click += delegate { ReleaseLine(); };
-            lineControls.Controls.Add(_pullButton);
-            lineControls.Controls.Add(_releaseButton);
+            _reelControl = new ReelControl();
+            _reelControl.Dock = DockStyle.Top;
+            _reelControl.Height = 300;
+            _reelControl.PullRequested += delegate { PullLineFromReel(); };
+            _reelControl.ReleaseRequested += delegate { ReleaseLineFromReel(); };
 
             right.Controls.Add(_castButton);
-            right.Controls.Add(lineControls);
-            right.Controls.Add(_progressBar);
-            right.Controls.Add(_tensionBar);
+            right.Controls.Add(_reelControl);
             right.Controls.Add(_sceneInfoLabel);
 
             main.Controls.Add(left, 0, 0);
@@ -432,16 +413,20 @@ namespace FishingGame.WinForms
 
         private void RefreshFishingControls()
         {
-            _pullButton.Enabled = _isFishing;
-            _releaseButton.Enabled = _isFishing;
             _castButton.Enabled = !_isFishing;
-            _tensionBar.Value = ClampToProgress(_tension);
-            _progressBar.Value = ClampToProgress(_catchProgress);
+            _reelControl.IsFishing = _isFishing;
+            _reelControl.Tension = _tension;
+            _reelControl.Progress = _catchProgress;
+            _reelControl.SafeLow = _safeLow;
+            _reelControl.SafeHigh = _safeHigh;
+            _reelControl.ActiveFish = _activeFish;
+            _reelControl.Invalidate();
             _waterPanel.Tension = _tension;
             _waterPanel.Progress = _catchProgress;
             _waterPanel.SafeLow = _safeLow;
             _waterPanel.SafeHigh = _safeHigh;
             _waterPanel.ActiveFish = _activeFish;
+            _waterPanel.LastCatch = _lastCatch;
             _waterPanel.IsFishing = _isFishing;
             _waterPanel.Invalidate();
         }
@@ -479,6 +464,7 @@ namespace FishingGame.WinForms
             {
                 CatchRecord itemCatch = GameRules.CreateItemCatch(_activeItem);
                 int bonus = GameRules.RegisterCatch(_state, itemCatch);
+                _lastCatch = itemCatch;
                 _catchLabel.Text = "钩到了隐藏物品：" + itemCatch.IconSymbol + " " + itemCatch.SpeciesName;
                 SetStatus("隐藏物品进入背包，可出售获得 " + itemCatch.SellPrice + " 金币。首次发现奖励 " + bonus + " 金币。");
                 _activeItem = null;
@@ -488,6 +474,7 @@ namespace FishingGame.WinForms
 
             _activeFish = GameRules.ChooseFish(_state, _currentSceneId, _random);
             _pendingCatch = GameRules.CreateCatch(_activeFish, _random);
+            _lastCatch = null;
             _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
             TensionWindow window = GameRules.CalculateTensionWindow(_activeFish, rod);
             _tension = 50;
@@ -496,7 +483,7 @@ namespace FishingGame.WinForms
             _safeHigh = window.High;
             _isFishing = true;
             _catchLabel.Text = "鱼咬钩了！保持张力在 " + _safeLow + "-" + _safeHigh + "。";
-            SetStatus("正在钓鱼：Space 拉线，S 或 ↓ 放线。");
+            SetStatus("正在钓鱼：顺时针转动卷线器拉线，逆时针放线。Space / S 也可操作。");
             _fishingTimer.Start();
             RefreshFishingControls();
         }
@@ -539,18 +526,34 @@ namespace FishingGame.WinForms
 
         private void PullLine()
         {
-            if (!_isFishing || _activeFish == null) return;
-            Rod rod = GameData.FindRod(_state.EquippedRodId);
-            TensionActionProfile profile = _actionProfile ?? GameRules.CalculateActionProfile(_activeFish, rod);
-            AdjustTension(profile.PullAmount);
+            ApplyLineAction(true, true);
         }
 
         private void ReleaseLine()
         {
+            ApplyLineAction(false, true);
+        }
+
+        private void PullLineFromReel()
+        {
+            ApplyLineAction(true, false);
+        }
+
+        private void ReleaseLineFromReel()
+        {
+            ApplyLineAction(false, false);
+        }
+
+        private void ApplyLineAction(bool pull, bool spinReel)
+        {
             if (!_isFishing || _activeFish == null) return;
             Rod rod = GameData.FindRod(_state.EquippedRodId);
             TensionActionProfile profile = _actionProfile ?? GameRules.CalculateActionProfile(_activeFish, rod);
-            AdjustTension(-profile.ReleaseAmount);
+            AdjustTension(pull ? profile.PullAmount : -profile.ReleaseAmount);
+            if (spinReel)
+            {
+                _reelControl.Spin(pull ? 18 : -18);
+            }
         }
 
         private void AdjustTension(double amount)
@@ -570,6 +573,7 @@ namespace FishingGame.WinForms
             {
                 int bonus = GameRules.RegisterCatch(_state, _pendingCatch);
                 string hidden = _pendingCatch.IsHidden ? "隐藏鱼！" : "";
+                _lastCatch = _pendingCatch;
                 if (!_pendingCatch.IsSellable)
                 {
                     _catchLabel.Text = "钓到了偏小的 " + _pendingCatch.SpeciesName + "，已放生。";
@@ -750,20 +754,6 @@ namespace FishingGame.WinForms
             return button;
         }
 
-        private Button CircleButton(string text, string symbol, Color color)
-        {
-            RoundButton button = new RoundButton();
-            button.Text = text;
-            button.Symbol = symbol;
-            button.CircleColor = color;
-            button.ForeColor = Color.White;
-            button.Width = 78;
-            button.Height = 78;
-            button.Margin = new Padding(8, 0, 8, 0);
-            button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderSize = 0;
-            return button;
-        }
     }
 
     internal class DisplayItem<T>
@@ -783,48 +773,292 @@ namespace FishingGame.WinForms
         }
     }
 
-    internal class RoundButton : Button
+    internal class ReelControl : Control
     {
-        public Color CircleColor { get; set; }
-        public string Symbol { get; set; }
+        private bool _dragging;
+        private double _lastAngle;
+        private double _dragAccumulator;
+        private double _reelAngle;
 
-        public RoundButton()
+        public event EventHandler PullRequested;
+        public event EventHandler ReleaseRequested;
+        public bool IsFishing { get; set; }
+        public double Tension { get; set; }
+        public double Progress { get; set; }
+        public int SafeLow { get; set; }
+        public int SafeHigh { get; set; }
+        public FishSpecies ActiveFish { get; set; }
+
+        public ReelControl()
         {
-            CircleColor = Color.FromArgb(70, 130, 180);
-            Symbol = "";
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            DoubleBuffered = true;
+            BackColor = Color.FromArgb(245, 248, 247);
+            Cursor = Cursors.Hand;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);
         }
 
-        protected override void OnResize(EventArgs e)
+        public void Spin(double degrees)
         {
-            base.OnResize(e);
-            GraphicsPath path = new GraphicsPath();
-            path.AddEllipse(2, 2, Width - 4, Height - 4);
-            Region = new Region(path);
+            _reelAngle += degrees;
+            Invalidate();
         }
 
-        protected override void OnPaint(PaintEventArgs pevent)
+        protected override void OnMouseDown(MouseEventArgs e)
         {
-            Graphics g = pevent.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle rect = new Rectangle(3, 3, Width - 6, Height - 6);
-            Color fill = Enabled ? CircleColor : Color.FromArgb(150, 150, 150);
-            using (LinearGradientBrush brush = new LinearGradientBrush(rect, ControlPaint.Light(fill), ControlPaint.Dark(fill), LinearGradientMode.ForwardDiagonal))
-            using (Pen pen = new Pen(Color.FromArgb(90, Color.White), 2F))
-            using (Brush text = new SolidBrush(ForeColor))
-            using (Font symbolFont = new Font("Microsoft YaHei UI", 20F, FontStyle.Bold))
-            using (Font labelFont = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Bold))
-            using (StringFormat format = new StringFormat())
+            base.OnMouseDown(e);
+            Focus();
+            if (!IsFishing || !PointInsideReel(e.Location)) return;
+            _dragging = true;
+            Capture = true;
+            _lastAngle = AngleFromReelCenter(e.Location);
+            _dragAccumulator = 0;
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (!_dragging || !IsFishing) return;
+            double angle = AngleFromReelCenter(e.Location);
+            double delta = NormalizeRadians(angle - _lastAngle);
+            _lastAngle = angle;
+            if (Math.Abs(delta) < 0.015) return;
+
+            _reelAngle += delta * 180.0 / Math.PI;
+            _dragAccumulator += delta;
+            while (_dragAccumulator >= 0.18)
             {
-                format.Alignment = StringAlignment.Center;
-                format.LineAlignment = StringAlignment.Center;
-                g.FillEllipse(brush, rect);
-                g.DrawEllipse(pen, rect);
-                Rectangle symbolRect = new Rectangle(rect.Left, rect.Top + 8, rect.Width, 28);
-                Rectangle labelRect = new Rectangle(rect.Left, rect.Top + 35, rect.Width, 32);
-                g.DrawString(Symbol, symbolFont, text, symbolRect, format);
-                g.DrawString(Text, labelFont, text, labelRect, format);
+                OnPullRequested();
+                _dragAccumulator -= 0.18;
             }
+            while (_dragAccumulator <= -0.18)
+            {
+                OnReleaseRequested();
+                _dragAccumulator += 0.18;
+            }
+            Invalidate();
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            _dragging = false;
+            Capture = false;
+            _dragAccumulator = 0;
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (!IsFishing) return;
+            if (e.Delta > 0)
+            {
+                Spin(16);
+                OnPullRequested();
+            }
+            else if (e.Delta < 0)
+            {
+                Spin(-16);
+                OnReleaseRequested();
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            Rectangle bounds = ClientRectangle;
+            if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+            using (LinearGradientBrush back = new LinearGradientBrush(bounds, Color.FromArgb(252, 254, 253), Color.FromArgb(226, 234, 233), LinearGradientMode.Vertical))
+            using (Pen edge = new Pen(Color.FromArgb(210, 217, 216)))
+            {
+                g.FillRectangle(back, bounds);
+                g.DrawRectangle(edge, 0, 0, bounds.Width - 1, bounds.Height - 1);
+            }
+
+            DrawGauge(g, bounds);
+            DrawReel(g, bounds);
+        }
+
+        private void DrawGauge(Graphics g, Rectangle bounds)
+        {
+            float radius = Math.Min(bounds.Width - 52, 230) / 2F;
+            radius = Math.Max(70F, radius);
+            PointF center = new PointF(bounds.Width / 2F, 126F);
+            int low = SafeHigh > SafeLow ? SafeLow : 36;
+            int high = SafeHigh > SafeLow ? SafeHigh : 64;
+            Color inactive = Color.FromArgb(135, 155, 162);
+            Color gaugeBack = IsFishing ? Color.FromArgb(210, 201, 82, 72) : inactive;
+            Color safeColor = IsFishing ? Color.FromArgb(225, 50, 160, 105) : Color.FromArgb(150, 170, 180, 176);
+            Color needleColor = IsFishing ? Color.FromArgb(240, 246, 174, 55) : Color.FromArgb(160, 120, 128, 132);
+
+            using (Pen backPen = new Pen(gaugeBack, 12F))
+            using (Pen safePen = new Pen(safeColor, 13F))
+            using (Pen needlePen = new Pen(needleColor, 4F))
+            using (Brush labelBrush = new SolidBrush(Color.FromArgb(42, 55, 59)))
+            using (Brush mutedBrush = new SolidBrush(Color.FromArgb(92, 105, 108)))
+            using (Font title = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold))
+            using (Font small = new Font("Microsoft YaHei UI", 8F, FontStyle.Regular))
+            using (StringFormat centerText = new StringFormat())
+            {
+                backPen.StartCap = LineCap.Round;
+                backPen.EndCap = LineCap.Round;
+                safePen.StartCap = LineCap.Round;
+                safePen.EndCap = LineCap.Round;
+                DrawGaugeArc(g, backPen, center, radius, 0, 100);
+                DrawGaugeArc(g, safePen, center, radius, low, high);
+
+                PointF needle = PointOnGauge(center, radius - 10, Tension);
+                using (Brush needleBrush = new SolidBrush(needleColor))
+                {
+                    g.DrawLine(needlePen, center, needle);
+                    g.FillEllipse(needleBrush, center.X - 5, center.Y - 5, 10, 10);
+                }
+
+                centerText.Alignment = StringAlignment.Center;
+                centerText.LineAlignment = StringAlignment.Center;
+                string value = IsFishing ? ((int)Math.Round(Tension)).ToString() : "--";
+                g.DrawString("张力 " + value, title, labelBrush, new RectangleF(0, 18, bounds.Width, 24), centerText);
+                g.DrawString("安全区 " + low + "-" + high + "    进度 " + (int)Math.Round(Progress) + "%", small, mutedBrush, new RectangleF(0, 42, bounds.Width, 22), centerText);
+            }
+        }
+
+        private void DrawReel(Graphics g, Rectangle bounds)
+        {
+            PointF center = ReelCenter();
+            float radius = ReelRadius();
+            RectangleF outer = new RectangleF(center.X - radius, center.Y - radius, radius * 2, radius * 2);
+            Color rim = IsFishing ? Color.FromArgb(76, 91, 99) : Color.FromArgb(136, 144, 146);
+            Color inner = IsFishing ? Color.FromArgb(54, 65, 72) : Color.FromArgb(170, 176, 178);
+
+            using (GraphicsPath path = new GraphicsPath())
+            {
+                path.AddEllipse(outer);
+                using (PathGradientBrush glow = new PathGradientBrush(path))
+                using (Pen rimPen = new Pen(Color.FromArgb(235, 248, 250, 248), 3F))
+                using (Pen darkPen = new Pen(Color.FromArgb(130, 32, 42, 47), 2F))
+                {
+                    glow.CenterColor = Color.FromArgb(245, 230, 236, 235);
+                    glow.SurroundColors = new[] { rim };
+                    g.FillPath(glow, path);
+                    g.DrawEllipse(rimPen, outer);
+                    g.DrawEllipse(darkPen, outer);
+                }
+            }
+
+            using (Pen spoke = new Pen(Color.FromArgb(210, 238, 242, 240), 5F))
+            using (Brush hub = new SolidBrush(inner))
+            using (Brush knob = new SolidBrush(IsFishing ? Color.FromArgb(231, 111, 81) : Color.FromArgb(150, 150, 150)))
+            using (Brush labelBrush = new SolidBrush(Color.FromArgb(42, 55, 59)))
+            using (Brush pullBrush = new SolidBrush(Color.FromArgb(194, 73, 58)))
+            using (Brush releaseBrush = new SolidBrush(Color.FromArgb(48, 115, 176)))
+            using (Font labelFont = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
+            using (Font fishFont = new Font("Microsoft YaHei UI", 8F, FontStyle.Regular))
+            using (StringFormat centerText = new StringFormat())
+            {
+                spoke.StartCap = LineCap.Round;
+                spoke.EndCap = LineCap.Round;
+                for (int i = 0; i < 5; i++)
+                {
+                    double a = DegreesToRadians(_reelAngle + i * 72);
+                    PointF p = new PointF(center.X + (float)Math.Cos(a) * radius * 0.72F, center.Y + (float)Math.Sin(a) * radius * 0.72F);
+                    g.DrawLine(spoke, center, p);
+                }
+
+                g.FillEllipse(hub, center.X - 18, center.Y - 18, 36, 36);
+                double handleAngle = DegreesToRadians(_reelAngle + 38);
+                PointF handle = new PointF(center.X + (float)Math.Cos(handleAngle) * radius * 0.86F, center.Y + (float)Math.Sin(handleAngle) * radius * 0.86F);
+                g.FillEllipse(knob, handle.X - 10, handle.Y - 10, 20, 20);
+
+                centerText.Alignment = StringAlignment.Center;
+                centerText.LineAlignment = StringAlignment.Center;
+                g.DrawString("放线", labelFont, releaseBrush, new RectangleF(8, center.Y - 12, 64, 24), centerText);
+                g.DrawString("拉线", labelFont, pullBrush, new RectangleF(bounds.Width - 72, center.Y - 12, 64, 24), centerText);
+                string target = ActiveFish == null ? "等待咬钩" : ActiveFish.Rarity + "  " + ActiveFish.Name;
+                g.DrawString(target, fishFont, labelBrush, new RectangleF(12, bounds.Height - 30, bounds.Width - 24, 20), centerText);
+            }
+        }
+
+        private void DrawGaugeArc(Graphics g, Pen pen, PointF center, float radius, double start, double end)
+        {
+            if (end < start)
+            {
+                double temp = start;
+                start = end;
+                end = temp;
+            }
+
+            int steps = Math.Max(6, (int)Math.Ceiling((end - start) / 2.0));
+            PointF[] points = new PointF[steps + 1];
+            for (int i = 0; i <= steps; i++)
+            {
+                double value = start + (end - start) * i / steps;
+                points[i] = PointOnGauge(center, radius, value);
+            }
+            g.DrawLines(pen, points);
+        }
+
+        private PointF PointOnGauge(PointF center, float radius, double value)
+        {
+            value = ClampDouble(value, 0, 100);
+            double angle = Math.PI * (1.0 - value / 100.0);
+            return new PointF(center.X + (float)Math.Cos(angle) * radius, center.Y - (float)Math.Sin(angle) * radius);
+        }
+
+        private bool PointInsideReel(Point point)
+        {
+            PointF center = ReelCenter();
+            float radius = ReelRadius() + 22;
+            double dx = point.X - center.X;
+            double dy = point.Y - center.Y;
+            return dx * dx + dy * dy <= radius * radius;
+        }
+
+        private double AngleFromReelCenter(Point point)
+        {
+            PointF center = ReelCenter();
+            return Math.Atan2(point.Y - center.Y, point.X - center.X);
+        }
+
+        private PointF ReelCenter()
+        {
+            float radius = ReelRadius();
+            return new PointF(Width / 2F, Math.Max(190F, Height - radius - 38F));
+        }
+
+        private float ReelRadius()
+        {
+            return Math.Min(68F, Math.Max(48F, Math.Min(Width, Height) / 4F));
+        }
+
+        private static double NormalizeRadians(double value)
+        {
+            while (value > Math.PI) value -= Math.PI * 2;
+            while (value < -Math.PI) value += Math.PI * 2;
+            return value;
+        }
+
+        private static double DegreesToRadians(double value)
+        {
+            return value * Math.PI / 180.0;
+        }
+
+        private static double ClampDouble(double value, double min, double max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
+        }
+
+        private void OnPullRequested()
+        {
+            if (PullRequested != null) PullRequested(this, EventArgs.Empty);
+        }
+
+        private void OnReleaseRequested()
+        {
+            if (ReleaseRequested != null) ReleaseRequested(this, EventArgs.Empty);
         }
     }
 
@@ -837,6 +1071,7 @@ namespace FishingGame.WinForms
         public double Progress { get; set; }
         public int SafeLow { get; set; }
         public int SafeHigh { get; set; }
+        public CatchRecord LastCatch { get; set; }
 
         public WaterPanel()
         {
@@ -859,11 +1094,16 @@ namespace FishingGame.WinForms
                 g.FillRectangle(brush, bounds);
             }
 
+            DrawImageLighting(g, bounds);
             DrawScenery(g, bounds);
             DrawWaves(g, bounds);
             DrawFishShadows(g, bounds);
             DrawDock(g, bounds);
             DrawFishingState(g, bounds);
+            if (!IsFishing && LastCatch != null)
+            {
+                DrawCatchShowcase(g, bounds, LastCatch);
+            }
         }
 
         private void DrawScenery(Graphics g, Rectangle bounds)
@@ -911,6 +1151,37 @@ namespace FishingGame.WinForms
             else
             {
                 DrawDragonTide(g, bounds);
+            }
+        }
+
+        private void DrawImageLighting(Graphics g, Rectangle bounds)
+        {
+            int difficulty = Scene == null ? 1 : Scene.Difficulty;
+            Color rayColor = difficulty >= 8 ? Color.FromArgb(42, 130, 245, 230) : Color.FromArgb(44, 255, 240, 172);
+            using (Brush depth = new LinearGradientBrush(bounds, Color.FromArgb(0, 0, 0, 0), Color.FromArgb(120, 8, 28, 45), LinearGradientMode.Vertical))
+            using (Brush ray = new SolidBrush(rayColor))
+            using (Brush particle = new SolidBrush(difficulty >= 8 ? Color.FromArgb(120, 140, 255, 235) : Color.FromArgb(105, 255, 250, 205)))
+            {
+                g.FillRectangle(depth, bounds);
+                for (int i = 0; i < 4; i++)
+                {
+                    int startX = difficulty >= 7 ? bounds.Width - 120 - i * 70 : 80 + i * 78;
+                    Point[] beam = {
+                        new Point(startX, -10),
+                        new Point(startX + 40, -10),
+                        new Point(startX + 150 + i * 26, bounds.Height),
+                        new Point(startX - 80 + i * 16, bounds.Height)
+                    };
+                    g.FillPolygon(ray, beam);
+                }
+
+                for (int i = 0; i < 46; i++)
+                {
+                    int x = 16 + (i * 67 + difficulty * 23) % Math.Max(60, bounds.Width - 32);
+                    int y = 36 + (i * 43 + difficulty * 19) % Math.Max(80, bounds.Height - 82);
+                    int size = 2 + i % 3;
+                    g.FillEllipse(particle, x, y, size, size);
+                }
             }
         }
 
@@ -1047,10 +1318,41 @@ namespace FishingGame.WinForms
                     g.DrawLine(pen, x, y - 16, x - 16, y - 38);
                 }
             }
+
+            using (Pen bubble = new Pen(Color.FromArgb(125, Color.White), 2F))
+            {
+                for (int i = 0; i < 18; i++)
+                {
+                    int size = 5 + i % 4 * 3;
+                    int x = 34 + (i * 61) % Math.Max(90, bounds.Width - 70);
+                    int y = 78 + (i * 47) % Math.Max(110, bounds.Height - 150);
+                    g.DrawEllipse(bubble, x, y, size, size);
+                }
+            }
         }
 
         private void DrawIce(Graphics g, Rectangle bounds)
         {
+            using (Pen auroraA = new Pen(Color.FromArgb(115, 120, 255, 210), 7F))
+            using (Pen auroraB = new Pen(Color.FromArgb(95, 205, 150, 255), 5F))
+            {
+                Point[] ribbonA = {
+                    new Point(0, 74),
+                    new Point(bounds.Width / 4, 34),
+                    new Point(bounds.Width / 2, 68),
+                    new Point(bounds.Width * 3 / 4, 28),
+                    new Point(bounds.Width, 58)
+                };
+                Point[] ribbonB = {
+                    new Point(0, 118),
+                    new Point(bounds.Width / 3, 84),
+                    new Point(bounds.Width * 2 / 3, 116),
+                    new Point(bounds.Width, 76)
+                };
+                g.DrawCurve(auroraA, ribbonA);
+                g.DrawCurve(auroraB, ribbonB);
+            }
+
             using (Brush ice = new SolidBrush(Color.FromArgb(150, 230, 250, 255)))
             using (Pen edge = new Pen(Color.FromArgb(180, 172, 218, 239), 2F))
             {
@@ -1071,6 +1373,17 @@ namespace FishingGame.WinForms
 
         private void DrawStorm(Graphics g, Rectangle bounds)
         {
+            using (Brush cloud = new SolidBrush(Color.FromArgb(135, 30, 39, 54)))
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    int x = -80 + i * bounds.Width / 5;
+                    int y = 22 + (i % 2) * 20;
+                    g.FillEllipse(cloud, x, y, 180, 48);
+                    g.FillEllipse(cloud, x + 52, y - 18, 170, 58);
+                }
+            }
+
             using (Pen rain = new Pen(Color.FromArgb(120, Color.White), 2F))
             using (Pen lightning = new Pen(Color.FromArgb(230, 255, 232, 80), 4F))
             {
@@ -1092,6 +1405,15 @@ namespace FishingGame.WinForms
 
         private void DrawAbyss(Graphics g, Rectangle bounds)
         {
+            using (Pen beam = new Pen(Color.FromArgb(45, 100, 230, 255), 10F))
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    int x = 80 + i * bounds.Width / 4;
+                    g.DrawLine(beam, x, 0, x - 70, bounds.Height);
+                }
+            }
+
             using (Brush glow = new SolidBrush(Color.FromArgb(110, 60, 220, 210)))
             using (Pen vent = new Pen(Color.FromArgb(130, 200, 240, 255), 3F))
             {
@@ -1107,6 +1429,16 @@ namespace FishingGame.WinForms
 
         private void DrawDragonTide(Graphics g, Rectangle bounds)
         {
+            using (Pen vortex = new Pen(Color.FromArgb(95, 110, 250, 220), 4F))
+            {
+                Rectangle ring = new Rectangle(bounds.Width / 2 - 150, bounds.Height / 2 - 72, 300, 128);
+                for (int i = 0; i < 4; i++)
+                {
+                    Rectangle r = Rectangle.Inflate(ring, -i * 28, -i * 12);
+                    g.DrawArc(vortex, r, 190 + i * 12, 250);
+                }
+            }
+
             using (Pen dragon = new Pen(Color.FromArgb(170, 255, 205, 92), 8F))
             using (Brush eye = new SolidBrush(Color.FromArgb(230, 255, 80, 60)))
             {
@@ -1181,26 +1513,177 @@ namespace FishingGame.WinForms
             {
                 g.DrawString(sceneName, title, textBrush, 24, 20);
                 string line = IsFishing && ActiveFish != null
-                    ? "目标鱼影：" + (ActiveFish.IsHidden ? "异常稀有" : ActiveFish.Rarity) + "  张力安全区 " + SafeLow + "-" + SafeHigh
+                    ? "目标鱼影：" + (ActiveFish.IsHidden ? "异常稀有" : ActiveFish.Rarity) + "  " + ActiveFish.Name
                     : "选择钓点后抛竿，等待水面动静。";
                 g.DrawString(line, small, textBrush, 28, 58);
             }
+        }
 
-            if (IsFishing)
+        private void DrawCatchShowcase(Graphics g, Rectangle bounds, CatchRecord item)
+        {
+            int cardWidth = Math.Min(380, Math.Max(240, bounds.Width - 72));
+            int cardHeight = 142;
+            Rectangle card = new Rectangle(bounds.Right - cardWidth - 28, Math.Max(92, bounds.Top + 86), cardWidth, cardHeight);
+            if (card.Bottom > bounds.Bottom - 72)
             {
-                Rectangle meter = new Rectangle(40, bounds.Height - 112, bounds.Width - 80, 20);
-                using (Brush back = new SolidBrush(Color.FromArgb(160, 255, 255, 255)))
-                using (Brush safe = new SolidBrush(Color.FromArgb(180, 82, 190, 121)))
-                using (Brush pointer = new SolidBrush(Color.FromArgb(230, 255, 210, 76)))
+                card.Y = Math.Max(76, bounds.Bottom - cardHeight - 82);
+            }
+
+            using (GraphicsPath cardPath = RoundedRectangle(card, 16))
+            using (Brush shadow = new SolidBrush(Color.FromArgb(85, 0, 0, 0)))
+            using (LinearGradientBrush fill = new LinearGradientBrush(card, Color.FromArgb(232, 255, 255, 250), Color.FromArgb(218, 218, 238, 232), LinearGradientMode.ForwardDiagonal))
+            using (Pen border = new Pen(Color.FromArgb(180, Color.White), 2F))
+            {
+                Rectangle shadowRect = new Rectangle(card.X + 8, card.Y + 10, card.Width, card.Height);
+                using (GraphicsPath shadowPath = RoundedRectangle(shadowRect, 16))
                 {
-                    g.FillRectangle(back, meter);
-                    int safeX = meter.Left + SafeLow * meter.Width / 100;
-                    int safeW = Math.Max(4, (SafeHigh - SafeLow) * meter.Width / 100);
-                    g.FillRectangle(safe, safeX, meter.Top, safeW, meter.Height);
-                    int pointerX = meter.Left + (int)(Tension * meter.Width / 100.0);
-                    g.FillRectangle(pointer, pointerX - 3, meter.Top - 6, 6, meter.Height + 12);
+                    g.FillPath(shadow, shadowPath);
+                }
+                g.FillPath(fill, cardPath);
+                g.DrawPath(border, cardPath);
+            }
+
+            Rectangle icon = new Rectangle(card.Left + 16, card.Top + 18, 108, 96);
+            if (item.IsFish)
+            {
+                DrawCatchFishIcon(g, icon, item);
+            }
+            else
+            {
+                DrawCatchItemIcon(g, icon, item);
+            }
+
+            using (Brush titleBrush = new SolidBrush(Color.FromArgb(32, 42, 46)))
+            using (Brush smallBrush = new SolidBrush(Color.FromArgb(72, 86, 88)))
+            using (Font title = new Font("Microsoft YaHei UI", 12F, FontStyle.Bold))
+            using (Font meta = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular))
+            {
+                Rectangle text = new Rectangle(card.Left + 136, card.Top + 22, card.Width - 152, 30);
+                g.DrawString(item.SpeciesName, title, titleBrush, text);
+                string second = item.IsFish
+                    ? item.Rarity + "  " + item.WeightGrade + "  " + item.Weight + "kg"
+                    : item.Rarity;
+                g.DrawString(second, meta, smallBrush, new Rectangle(card.Left + 138, card.Top + 58, card.Width - 152, 24));
+                string price = item.IsSellable ? "售价 " + item.SellPrice + " 金币" : "偏小放生";
+                g.DrawString(price, meta, smallBrush, new Rectangle(card.Left + 138, card.Top + 88, card.Width - 152, 24));
+            }
+        }
+
+        private void DrawCatchFishIcon(Graphics g, Rectangle icon, CatchRecord item)
+        {
+            Color body = RarityColor(item.Rarity, item.IsHidden);
+            Rectangle bodyRect = new Rectangle(icon.Left + 18, icon.Top + 30, icon.Width - 42, 38);
+            Point[] tail = {
+                new Point(bodyRect.Right - 2, bodyRect.Top + bodyRect.Height / 2),
+                new Point(icon.Right - 8, bodyRect.Top + 4),
+                new Point(icon.Right - 8, bodyRect.Bottom - 4)
+            };
+            Point[] fin = {
+                new Point(bodyRect.Left + 32, bodyRect.Top + 2),
+                new Point(bodyRect.Left + 54, bodyRect.Top - 18),
+                new Point(bodyRect.Left + 68, bodyRect.Top + 6)
+            };
+
+            if (item.IsHidden)
+            {
+                using (GraphicsPath glowPath = new GraphicsPath())
+                {
+                    glowPath.AddEllipse(icon.Left + 2, icon.Top + 8, icon.Width - 4, icon.Height - 16);
+                    using (PathGradientBrush glow = new PathGradientBrush(glowPath))
+                    {
+                        glow.CenterColor = Color.FromArgb(150, body);
+                        glow.SurroundColors = new[] { Color.FromArgb(0, body) };
+                        g.FillPath(glow, glowPath);
+                    }
                 }
             }
+
+            using (Brush bodyBrush = new SolidBrush(body))
+            using (Brush finBrush = new SolidBrush(ControlPaint.Light(body)))
+            using (Brush eye = new SolidBrush(Color.FromArgb(35, 42, 46)))
+            using (Pen shine = new Pen(Color.FromArgb(180, Color.White), 2F))
+            {
+                g.FillPolygon(finBrush, fin);
+                g.FillEllipse(bodyBrush, bodyRect);
+                g.FillPolygon(bodyBrush, tail);
+                g.DrawArc(shine, bodyRect.Left + 10, bodyRect.Top + 6, bodyRect.Width - 20, bodyRect.Height - 12, 195, 70);
+                g.FillEllipse(eye, bodyRect.Left + 14, bodyRect.Top + 13, 6, 6);
+            }
+        }
+
+        private void DrawCatchItemIcon(Graphics g, Rectangle icon, CatchRecord item)
+        {
+            using (GraphicsPath badge = RoundedRectangle(icon, 18))
+            using (LinearGradientBrush fill = new LinearGradientBrush(icon, Color.FromArgb(255, 243, 216, 111), Color.FromArgb(255, 81, 148, 192), LinearGradientMode.ForwardDiagonal))
+            using (Pen border = new Pen(Color.FromArgb(220, Color.White), 2F))
+            {
+                g.FillPath(fill, badge);
+                g.DrawPath(border, badge);
+            }
+
+            string symbol = item.IconSymbol ?? "";
+            using (Brush dark = new SolidBrush(Color.FromArgb(45, 58, 64)))
+            using (Pen darkPen = new Pen(Color.FromArgb(45, 58, 64), 4F))
+            using (Pen lightPen = new Pen(Color.FromArgb(220, Color.White), 2F))
+            using (Font font = new Font("Microsoft YaHei UI", 24F, FontStyle.Bold))
+            using (StringFormat format = new StringFormat())
+            {
+                format.Alignment = StringAlignment.Center;
+                format.LineAlignment = StringAlignment.Center;
+                if (symbol.Contains("机"))
+                {
+                    Rectangle phone = new Rectangle(icon.Left + 38, icon.Top + 17, 34, 62);
+                    using (GraphicsPath phonePath = RoundedRectangle(phone, 8))
+                    {
+                        g.DrawPath(darkPen, phonePath);
+                        g.DrawLine(lightPen, phone.Left + 10, phone.Bottom - 10, phone.Right - 10, phone.Bottom - 10);
+                    }
+                }
+                else if (symbol.Contains("宝") || symbol.Contains("晶"))
+                {
+                    Point[] gem = {
+                        new Point(icon.Left + icon.Width / 2, icon.Top + 16),
+                        new Point(icon.Right - 18, icon.Top + 42),
+                        new Point(icon.Left + icon.Width / 2, icon.Bottom - 14),
+                        new Point(icon.Left + 18, icon.Top + 42)
+                    };
+                    g.FillPolygon(dark, gem);
+                    g.DrawPolygon(lightPen, gem);
+                }
+                else if (symbol.Contains("表"))
+                {
+                    g.DrawLine(darkPen, icon.Left + icon.Width / 2, icon.Top + 12, icon.Left + icon.Width / 2, icon.Top + 30);
+                    g.DrawLine(darkPen, icon.Left + icon.Width / 2, icon.Bottom - 12, icon.Left + icon.Width / 2, icon.Bottom - 30);
+                    g.DrawEllipse(darkPen, icon.Left + 31, icon.Top + 30, 46, 46);
+                    g.DrawLine(lightPen, icon.Left + icon.Width / 2, icon.Top + 52, icon.Left + icon.Width / 2 + 11, icon.Top + 45);
+                }
+                else
+                {
+                    g.DrawString(symbol, font, dark, icon, format);
+                }
+            }
+        }
+
+        private static Color RarityColor(string rarity, bool hidden)
+        {
+            if (hidden) return Color.FromArgb(236, 194, 75);
+            if (rarity == "优秀") return Color.FromArgb(74, 169, 118);
+            if (rarity == "稀有") return Color.FromArgb(70, 131, 214);
+            if (rarity == "史诗") return Color.FromArgb(159, 96, 214);
+            if (rarity == "传说") return Color.FromArgb(232, 151, 54);
+            return Color.FromArgb(87, 158, 190);
+        }
+
+        private static GraphicsPath RoundedRectangle(Rectangle rect, int radius)
+        {
+            int d = Math.Max(2, radius * 2);
+            GraphicsPath path = new GraphicsPath();
+            path.AddArc(rect.Left, rect.Top, d, d, 180, 90);
+            path.AddArc(rect.Right - d, rect.Top, d, d, 270, 90);
+            path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
+            path.AddArc(rect.Left, rect.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
         }
 
         private static Color ParseColor(string hex)

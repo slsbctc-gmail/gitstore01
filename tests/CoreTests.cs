@@ -19,6 +19,8 @@ namespace FishingGame.Tests
             Run("fish and rods change tension windows", TestTensionWindowsVaryByFishAndRod);
             Run("fish traits change pull and release behavior", TestFishTraitsVaryActionBehavior);
             Run("weight classes control release and sale prices", TestWeightClassesControlSale);
+            Run("rarity pricing never inverts within a scene and grade", TestRarityPricingNeverInverts);
+            Run("sale prices honor weight and rarity", TestSalePricesHonorWeightAndRarity);
             Run("hidden non-fish items exist and sell for coins", TestHiddenItems);
             Run("aquarium capacity is enforced", TestAquariumCapacity);
             Run("ticket income starts at viewing gallery and is daily", TestTicketIncome);
@@ -176,6 +178,51 @@ namespace FishingGame.Tests
             GameRules.RegisterCatch(state, small);
             AssertEqual(0, state.Bag.Count, "small fish is released instead of bagged");
             AssertTrue(state.CollectionSpeciesIds.Contains(fish.Id), "released small fish still records collection");
+        }
+
+        private static void TestRarityPricingNeverInverts()
+        {
+            string[] order = { "普通", "优秀", "稀有", "史诗", "传说" };
+            foreach (SceneInfo scene in GameData.Scenes)
+            {
+                List<FishSpecies> fish = GameData.FishByScene[scene.Id].Where(f => !f.IsHidden).ToList();
+                for (int i = 0; i < order.Length - 1; i++)
+                {
+                    List<FishSpecies> lower = fish.Where(f => f.Rarity == order[i]).ToList();
+                    List<FishSpecies> higher = fish.Where(f => f.Rarity == order[i + 1]).ToList();
+                    if (lower.Count == 0 || higher.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    int lowerBestTrophy = lower.Max(f => GameRules.CreateCatchForWeight(f, f.MinWeight + (f.MaxWeight - f.MinWeight) * 0.94).SellPrice);
+                    int higherWorstTrophy = higher.Min(f => GameRules.CreateCatchForWeight(f, f.MinWeight + (f.MaxWeight - f.MinWeight) * 0.94).SellPrice);
+                    AssertTrue(higherWorstTrophy > lowerBestTrophy, scene.Name + " " + order[i + 1] + "极品 should beat " + order[i] + "极品");
+
+                    int lowerBestNormal = lower.Max(f => GameRules.CreateCatchForWeight(f, f.MinWeight + (f.MaxWeight - f.MinWeight) * 0.55).SellPrice);
+                    int higherWorstNormal = higher.Min(f => GameRules.CreateCatchForWeight(f, f.MinWeight + (f.MaxWeight - f.MinWeight) * 0.55).SellPrice);
+                    AssertTrue(higherWorstNormal > lowerBestNormal, scene.Name + " " + order[i + 1] + "一般 should beat " + order[i] + "一般");
+                }
+            }
+        }
+
+        private static void TestSalePricesHonorWeightAndRarity()
+        {
+            FishSpecies commonTrophy = GameData.AllFish.First(f => f.Name == "晴溪琥珀月纹龙鱼10");
+            FishSpecies excellentTrophy = GameData.AllFish.First(f => f.Name == "晴溪碧眼剑尾灯鱼16");
+            CatchRecord common = GameRules.CreateCatchForWeight(commonTrophy, 1.39);
+            CatchRecord excellent = GameRules.CreateCatchForWeight(excellentTrophy, 2.98);
+            AssertEqual("极品", common.WeightGrade, "common screenshot grade");
+            AssertEqual("极品", excellent.WeightGrade, "excellent screenshot grade");
+            AssertTrue(excellent.SellPrice > common.SellPrice, "heavier excellent trophy should beat lighter common trophy");
+
+            FishSpecies fish = GameData.AllFish.First(f => !f.IsHidden && f.MaxWeight - f.MinWeight > 1.0);
+            double span = fish.MaxWeight - fish.MinWeight;
+            CatchRecord lighterNormal = GameRules.CreateCatchForWeight(fish, fish.MinWeight + span * 0.38);
+            CatchRecord heavierNormal = GameRules.CreateCatchForWeight(fish, fish.MinWeight + span * 0.72);
+            AssertEqual("一般", lighterNormal.WeightGrade, "lighter normal grade");
+            AssertEqual("一般", heavierNormal.WeightGrade, "heavier normal grade");
+            AssertTrue(heavierNormal.SellPrice > lighterNormal.SellPrice, "normal fish should sell by weight");
         }
 
         private static void TestHiddenItems()
