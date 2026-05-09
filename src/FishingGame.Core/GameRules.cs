@@ -15,6 +15,16 @@ namespace FishingGame.Core
             state.EquippedRodId = GameData.Rods[0].Id;
             state.UnlockedSceneIds.Add(GameData.Scenes[0].Id);
             state.AquariumTierIndex = 0;
+            state.EquippedBaitId = GameData.Baits[0].Id;
+            state.EquippedHookId = GameData.Hooks[1].Id;
+            state.EquippedLineId = GameData.Lines[0].Id;
+            state.EquippedLineLength = GameData.Lines[0].MaxLength;
+            state.MaxStamina = 30;
+            state.Stamina = state.MaxStamina;
+            state.InfiniteStamina = true;
+            AddInventory(state.BaitInventory, state.EquippedBaitId, 30);
+            AddInventory(state.HookInventory, state.EquippedHookId, 20);
+            AddInventory(state.LineInventory, state.EquippedLineId, 1);
             return state;
         }
 
@@ -24,12 +34,31 @@ namespace FishingGame.Core
             if (state.UnlockedSceneIds == null) state.UnlockedSceneIds = new List<string>();
             if (state.Bag == null) state.Bag = new List<CatchRecord>();
             if (state.Aquarium == null) state.Aquarium = new List<CatchRecord>();
+            if (state.BaitInventory == null) state.BaitInventory = new List<InventoryStack>();
+            if (state.HookInventory == null) state.HookInventory = new List<InventoryStack>();
+            if (state.LineInventory == null) state.LineInventory = new List<InventoryStack>();
             if (state.CollectionSpeciesIds == null) state.CollectionSpeciesIds = new List<string>();
             if (state.ItemCollectionIds == null) state.ItemCollectionIds = new List<string>();
             if (state.LastSignInDate == null) state.LastSignInDate = "";
             if (state.LastTicketDate == null) state.LastTicketDate = "";
+            if (state.LastStaminaAt == null) state.LastStaminaAt = "";
             if (string.IsNullOrEmpty(state.EquippedRodId)) state.EquippedRodId = GameData.Rods[0].Id;
             if (!state.OwnedRodIds.Contains(state.EquippedRodId)) state.OwnedRodIds.Add(state.EquippedRodId);
+            if (string.IsNullOrEmpty(state.EquippedBaitId)) state.EquippedBaitId = GameData.Baits[0].Id;
+            if (string.IsNullOrEmpty(state.EquippedHookId)) state.EquippedHookId = GameData.Hooks[1].Id;
+            if (string.IsNullOrEmpty(state.EquippedLineId)) state.EquippedLineId = GameData.Lines[0].Id;
+            if (state.BaitInventory.Count == 0) AddInventory(state.BaitInventory, state.EquippedBaitId, 12);
+            if (state.HookInventory.Count == 0) AddInventory(state.HookInventory, state.EquippedHookId, 8);
+            if (state.LineInventory.Count == 0) AddInventory(state.LineInventory, state.EquippedLineId, 1);
+            FishingLine equippedLine = GameData.FindLine(state.EquippedLineId);
+            if (state.EquippedLineLength <= 0 || state.EquippedLineLength > equippedLine.MaxLength)
+            {
+                state.EquippedLineLength = equippedLine.MaxLength;
+            }
+            if (state.MaxStamina <= 0) state.MaxStamina = 30;
+            if (state.Stamina < 0) state.Stamina = 0;
+            if (state.Stamina > state.MaxStamina) state.Stamina = state.MaxStamina;
+            state.InfiniteStamina = true;
             if (state.UnlockedSceneIds.Count == 0) state.UnlockedSceneIds.Add(GameData.Scenes[0].Id);
             if (state.AquariumTierIndex < 0) state.AquariumTierIndex = 0;
             if (state.AquariumTierIndex >= GameData.AquariumTiers.Count) state.AquariumTierIndex = GameData.AquariumTiers.Count - 1;
@@ -79,6 +108,91 @@ namespace FishingGame.Core
             };
         }
 
+        public static int GetInventoryCount(List<InventoryStack> inventory, string itemId)
+        {
+            if (inventory == null || string.IsNullOrEmpty(itemId)) return 0;
+            InventoryStack stack = inventory.FirstOrDefault(i => i.ItemId == itemId);
+            return stack == null ? 0 : stack.Quantity;
+        }
+
+        public static void AddInventory(List<InventoryStack> inventory, string itemId, int quantity)
+        {
+            if (inventory == null || string.IsNullOrEmpty(itemId) || quantity <= 0) return;
+            InventoryStack stack = inventory.FirstOrDefault(i => i.ItemId == itemId);
+            if (stack == null)
+            {
+                inventory.Add(new InventoryStack { ItemId = itemId, Quantity = quantity });
+            }
+            else
+            {
+                stack.Quantity += quantity;
+            }
+        }
+
+        public static bool ConsumeInventory(List<InventoryStack> inventory, string itemId, int quantity)
+        {
+            if (inventory == null || string.IsNullOrEmpty(itemId) || quantity <= 0) return false;
+            InventoryStack stack = inventory.FirstOrDefault(i => i.ItemId == itemId);
+            if (stack == null || stack.Quantity < quantity) return false;
+            stack.Quantity -= quantity;
+            return true;
+        }
+
+        public static bool CanStartCast(GameState state)
+        {
+            NormalizeState(state);
+            return (state.InfiniteStamina || state.Stamina > 0)
+                && GetInventoryCount(state.BaitInventory, state.EquippedBaitId) > 0
+                && GetInventoryCount(state.HookInventory, state.EquippedHookId) > 0
+                && state.EquippedLineLength >= 8;
+        }
+
+        public static bool ConsumeStamina(GameState state)
+        {
+            NormalizeState(state);
+            if (state.InfiniteStamina) return true;
+            if (state.Stamina <= 0) return false;
+            state.Stamina -= 1;
+            return true;
+        }
+
+        public static bool ConsumeBait(GameState state)
+        {
+            NormalizeState(state);
+            return ConsumeInventory(state.BaitInventory, state.EquippedBaitId, 1);
+        }
+
+        public static void ApplyLineCut(GameState state, double lostLength)
+        {
+            NormalizeState(state);
+            state.EquippedLineLength = Math.Max(0, state.EquippedLineLength - Math.Max(1.0, lostLength));
+            ConsumeInventory(state.HookInventory, state.EquippedHookId, 1);
+        }
+
+        public static double FishAttractionWeight(GameState state, FishSpecies fish)
+        {
+            NormalizeState(state);
+            double weight = RarityWeight(fish.Rarity);
+            if (!state.CollectionSpeciesIds.Contains(fish.Id))
+            {
+                weight *= 3.5;
+            }
+
+            Bait bait = GameData.FindBait(state.EquippedBaitId);
+            Hook hook = GameData.FindHook(state.EquippedHookId);
+            weight *= BaitAttractionMultiplier(fish, bait);
+            weight *= HookAttractionMultiplier(fish, hook);
+            if (bait.RarityBias > 0)
+            {
+                weight *= 1.0 + bait.RarityBias * RarityTier(fish.Rarity) * 0.08;
+            }
+            if (IsLastMissingRegularFish(state, fish))
+            {
+                weight *= 60.0;
+            }
+            return Math.Max(0.000001, weight);
+        }
+
         public static bool CanUnlockNextScene(GameState state, SceneInfo currentScene, SceneInfo nextScene)
         {
             NormalizeState(state);
@@ -102,12 +216,7 @@ namespace FishingGame.Core
             List<FishSpecies> regular = fish.Where(f => !f.IsHidden).ToList();
             return WeightedPick(regular, delegate(FishSpecies f)
             {
-                double weight = RarityWeight(f.Rarity);
-                if (!state.CollectionSpeciesIds.Contains(f.Id))
-                {
-                    weight *= 3.5;
-                }
-                return weight;
+                return FishAttractionWeight(state, f);
             }, random);
         }
 
@@ -264,6 +373,61 @@ namespace FishingGame.Core
             return true;
         }
 
+        public static bool BuyBait(GameState state, string baitId)
+        {
+            NormalizeState(state);
+            Bait bait = GameData.FindBait(baitId);
+            if (state.Coins < bait.Price) return false;
+            state.Coins -= bait.Price;
+            AddInventory(state.BaitInventory, bait.Id, bait.PackSize);
+            return true;
+        }
+
+        public static bool BuyHook(GameState state, string hookId)
+        {
+            NormalizeState(state);
+            Hook hook = GameData.FindHook(hookId);
+            if (state.Coins < hook.Price) return false;
+            state.Coins -= hook.Price;
+            AddInventory(state.HookInventory, hook.Id, hook.PackSize);
+            return true;
+        }
+
+        public static bool BuyLine(GameState state, string lineId)
+        {
+            NormalizeState(state);
+            FishingLine line = GameData.FindLine(lineId);
+            if (state.Coins < line.Price) return false;
+            state.Coins -= line.Price;
+            AddInventory(state.LineInventory, line.Id, 1);
+            return true;
+        }
+
+        public static bool EquipBait(GameState state, string baitId)
+        {
+            NormalizeState(state);
+            if (GetInventoryCount(state.BaitInventory, baitId) <= 0) return false;
+            state.EquippedBaitId = baitId;
+            return true;
+        }
+
+        public static bool EquipHook(GameState state, string hookId)
+        {
+            NormalizeState(state);
+            if (GetInventoryCount(state.HookInventory, hookId) <= 0) return false;
+            state.EquippedHookId = hookId;
+            return true;
+        }
+
+        public static bool EquipLine(GameState state, string lineId)
+        {
+            NormalizeState(state);
+            if (GetInventoryCount(state.LineInventory, lineId) <= 0) return false;
+            state.EquippedLineId = lineId;
+            state.EquippedLineLength = GameData.FindLine(lineId).MaxLength;
+            return true;
+        }
+
         public static bool EquipRod(GameState state, string rodId)
         {
             NormalizeState(state);
@@ -379,6 +543,44 @@ namespace FishingGame.Core
             if (rarity == "史诗") return 6;
             if (rarity == "传说") return 1.5;
             return 100;
+        }
+
+        private static double BaitAttractionMultiplier(FishSpecies fish, Bait bait)
+        {
+            if (bait == null) return 0.25;
+            if (fish.FavoriteBaitId == bait.Id) return 3.0;
+            if (fish.AcceptableBaitId == bait.Id) return 1.45;
+            if (bait.IsLure && GameData.FindScene(fish.SceneId).Difficulty >= bait.MinSceneDifficulty) return 0.85;
+            return 0.35;
+        }
+
+        private static double HookAttractionMultiplier(FishSpecies fish, Hook hook)
+        {
+            if (hook == null) return 0.25;
+            int sizeDiff = Math.Abs(hook.Size - fish.PreferredHookSize);
+            double multiplier = 1.75 - sizeDiff * 0.34;
+            if (hook.Style == fish.PreferredHookStyle) multiplier += 0.35;
+            if (hook.Style == "巨物钩" && fish.MaxWeight < 2.5) multiplier *= 0.2;
+            if (hook.Style == "小钩" && fish.MaxWeight > 3.0) multiplier *= 0.65;
+            return ClampDouble(multiplier, 0.18, 2.25);
+        }
+
+        private static bool IsLastMissingRegularFish(GameState state, FishSpecies fish)
+        {
+            if (fish.IsHidden || state.CollectionSpeciesIds.Contains(fish.Id)) return false;
+            List<FishSpecies> missing = GameData.FishByScene[fish.SceneId]
+                .Where(f => !f.IsHidden && !state.CollectionSpeciesIds.Contains(f.Id))
+                .ToList();
+            return missing.Count == 1 && missing[0].Id == fish.Id;
+        }
+
+        private static int RarityTier(string rarity)
+        {
+            if (rarity == "优秀") return 1;
+            if (rarity == "稀有") return 2;
+            if (rarity == "史诗") return 3;
+            if (rarity == "传说") return 4;
+            return 0;
         }
 
         private static int FirstCatchBonus(string rarity, bool hidden)

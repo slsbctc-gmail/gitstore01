@@ -36,6 +36,8 @@ namespace FishingGame.WinForms
         private ListBox _sceneList;
         private ListBox _bagList;
         private ListBox _aquariumList;
+        private ListBox _tackleList;
+        private ListBox _tackleShopList;
         private ListBox _collectionList;
         private ListBox _rodList;
         private Button _castButton;
@@ -43,6 +45,8 @@ namespace FishingGame.WinForms
         private Button _sellButton;
         private Button _toAquariumButton;
         private Button _toBagButton;
+        private Button _equipTackleButton;
+        private Button _buyTackleButton;
         private Button _buyRodButton;
         private Button _equipRodButton;
         private Button _buyAquariumButton;
@@ -61,6 +65,10 @@ namespace FishingGame.WinForms
         private int _safeLow;
         private int _safeHigh;
         private bool _isFishing;
+        private bool _waitingForBite;
+        private bool _biteReady;
+        private int _biteTicks;
+        private int _biteWindowTicks;
 
         public MainForm()
         {
@@ -91,7 +99,12 @@ namespace FishingGame.WinForms
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
-            if (_isFishing && e.KeyCode == Keys.Space)
+            if (_waitingForBite && e.KeyCode == Keys.Space)
+            {
+                StrikeLine();
+                e.Handled = true;
+            }
+            else if (_isFishing && e.KeyCode == Keys.Space)
             {
                 PullLine();
                 e.Handled = true;
@@ -193,7 +206,7 @@ namespace FishingGame.WinForms
             _sceneInfoLabel.BackColor = Color.FromArgb(235, 244, 246);
 
             _castButton = ActionButton("抛竿");
-            _castButton.Click += delegate { CastLine(); };
+            _castButton.Click += delegate { CastOrStrike(); };
 
             _reelControl = new ReelControl();
             _reelControl.Dock = DockStyle.Top;
@@ -216,7 +229,7 @@ namespace FishingGame.WinForms
             TabControl tabs = new TabControl();
             tabs.Dock = DockStyle.Fill;
 
-            TabPage bagPage = new TabPage("背包/出售");
+            TabPage bagPage = new TabPage("渔获背包/出售");
             _bagList = new ListBox();
             _bagList.Dock = DockStyle.Fill;
             _sellButton = ActionButton("出售背包全部鱼");
@@ -226,6 +239,14 @@ namespace FishingGame.WinForms
             bagPage.Controls.Add(_bagList);
             bagPage.Controls.Add(_toAquariumButton);
             bagPage.Controls.Add(_sellButton);
+
+            TabPage tacklePage = new TabPage("渔具背包");
+            _tackleList = new ListBox();
+            _tackleList.Dock = DockStyle.Fill;
+            _equipTackleButton = ActionButton("装备选中渔具");
+            _equipTackleButton.Click += delegate { EquipSelectedTackle(); };
+            tacklePage.Controls.Add(_tackleList);
+            tacklePage.Controls.Add(_equipTackleButton);
 
             TabPage aquariumPage = new TabPage("鱼缸/水族馆");
             _aquariumList = new ListBox();
@@ -254,10 +275,20 @@ namespace FishingGame.WinForms
             rodPage.Controls.Add(_equipRodButton);
             rodPage.Controls.Add(_buyRodButton);
 
+            TabPage tackleShopPage = new TabPage("渔具商店");
+            _tackleShopList = new ListBox();
+            _tackleShopList.Dock = DockStyle.Fill;
+            _buyTackleButton = ActionButton("购买选中渔具");
+            _buyTackleButton.Click += delegate { BuySelectedTackle(); };
+            tackleShopPage.Controls.Add(_tackleShopList);
+            tackleShopPage.Controls.Add(_buyTackleButton);
+
             tabs.TabPages.Add(bagPage);
+            tabs.TabPages.Add(tacklePage);
             tabs.TabPages.Add(aquariumPage);
             tabs.TabPages.Add(collectionPage);
             tabs.TabPages.Add(rodPage);
+            tabs.TabPages.Add(tackleShopPage);
             return tabs;
         }
 
@@ -275,6 +306,8 @@ namespace FishingGame.WinForms
             RefreshSceneList();
             RefreshSceneInfo();
             RefreshBag();
+            RefreshTackleInventory();
+            RefreshTackleShop();
             RefreshAquarium();
             RefreshCollection();
             RefreshRods();
@@ -285,10 +318,13 @@ namespace FishingGame.WinForms
         private void RefreshTopBar()
         {
             Rod rod = GameData.FindRod(_state.EquippedRodId);
+            Bait bait = GameData.FindBait(_state.EquippedBaitId);
+            Hook hook = GameData.FindHook(_state.EquippedHookId);
+            FishingLine line = GameData.FindLine(_state.EquippedLineId);
             AquariumTier tier = GameData.AquariumTiers[_state.AquariumTierIndex];
             _coinLabel.Text = "金币 " + _state.Coins;
-            _rodLabel.Text = "鱼竿 " + rod.Name + "  幸运 " + rod.Luck;
-            _aquariumLabel.Text = tier.Name + " " + _state.Aquarium.Count + "/" + tier.Capacity;
+            _rodLabel.Text = "鱼竿 " + rod.Name + "  饵 " + bait.Name + "  钩 " + hook.Name;
+            _aquariumLabel.Text = tier.Name + " " + _state.Aquarium.Count + "/" + tier.Capacity + "  线" + Math.Round(_state.EquippedLineLength) + "/" + line.MaxLength + "m";
             _ticketsButton.Enabled = tier.TicketEnabled && _state.Aquarium.Count > 0;
         }
 
@@ -328,7 +364,8 @@ namespace FishingGame.WinForms
                 + Environment.NewLine + "难度：" + scene.Difficulty
                 + Environment.NewLine + "非隐藏图鉴：" + caughtRegular + "/" + regular
                 + Environment.NewLine + "隐藏鱼：" + caughtHidden + "/" + hidden
-                + Environment.NewLine + "收集完非隐藏鱼后解锁下一场景";
+                + Environment.NewLine + "收集完非隐藏鱼后解锁下一场景"
+                + Environment.NewLine + "体力：测试期无限";
             _waterPanel.Scene = scene;
             _waterPanel.Invalidate();
         }
@@ -342,6 +379,61 @@ namespace FishingGame.WinForms
                 _bagList.Items.Add(new DisplayItem<CatchRecord>(FormatCatch(item), item));
             }
             _bagList.EndUpdate();
+        }
+
+        private void RefreshTackleInventory()
+        {
+            _tackleList.BeginUpdate();
+            _tackleList.Items.Clear();
+            _tackleList.Items.Add("当前装备："
+                + GameData.FindBait(_state.EquippedBaitId).Name + " / "
+                + GameData.FindHook(_state.EquippedHookId).Name + " / "
+                + GameData.FindLine(_state.EquippedLineId).Name + " " + Math.Round(_state.EquippedLineLength) + "m");
+            _tackleList.Items.Add("── 饵料 ──");
+            foreach (Bait bait in GameData.Baits)
+            {
+                int count = GameRules.GetInventoryCount(_state.BaitInventory, bait.Id);
+                string mark = _state.EquippedBaitId == bait.Id ? "已装备 " : "";
+                _tackleList.Items.Add(new DisplayItem<object>(mark + bait.Name + " x" + count + "  " + bait.Kind + "  偏稀有+" + bait.RarityBias, bait));
+            }
+            _tackleList.Items.Add("── 鱼钩 ──");
+            foreach (Hook hook in GameData.Hooks)
+            {
+                int count = GameRules.GetInventoryCount(_state.HookInventory, hook.Id);
+                string mark = _state.EquippedHookId == hook.Id ? "已装备 " : "";
+                _tackleList.Items.Add(new DisplayItem<object>(mark + hook.Name + " x" + count + "  " + hook.Style + " 尺寸" + hook.Size + " 强度" + hook.HoldStrength, hook));
+            }
+            _tackleList.Items.Add("── 鱼线 ──");
+            foreach (FishingLine line in GameData.Lines)
+            {
+                int count = GameRules.GetInventoryCount(_state.LineInventory, line.Id);
+                string mark = _state.EquippedLineId == line.Id ? "已装备 " : "";
+                string length = _state.EquippedLineId == line.Id ? " 当前" + Math.Round(_state.EquippedLineLength) + "m" : "";
+                _tackleList.Items.Add(new DisplayItem<object>(mark + line.Name + " x" + count + "  承压" + line.MaxTension + " 耐切" + line.CutResistance + length, line));
+            }
+            _tackleList.EndUpdate();
+        }
+
+        private void RefreshTackleShop()
+        {
+            _tackleShopList.BeginUpdate();
+            _tackleShopList.Items.Clear();
+            _tackleShopList.Items.Add("── 饵料包 ──");
+            foreach (Bait bait in GameData.Baits)
+            {
+                _tackleShopList.Items.Add(new DisplayItem<object>(bait.Name + " " + bait.Kind + " x" + bait.PackSize + "  价" + bait.Price + "  场景" + bait.MinSceneDifficulty + "+", bait));
+            }
+            _tackleShopList.Items.Add("── 鱼钩包 ──");
+            foreach (Hook hook in GameData.Hooks)
+            {
+                _tackleShopList.Items.Add(new DisplayItem<object>(hook.Name + " x" + hook.PackSize + "  价" + hook.Price + "  尺寸" + hook.Size + " 强度" + hook.HoldStrength, hook));
+            }
+            _tackleShopList.Items.Add("── 鱼线卷 ──");
+            foreach (FishingLine line in GameData.Lines)
+            {
+                _tackleShopList.Items.Add(new DisplayItem<object>(line.Name + " [" + line.Quality + "]  价" + line.Price + "  " + line.MaxLength + "m 承压" + line.MaxTension, line));
+            }
+            _tackleShopList.EndUpdate();
         }
 
         private void RefreshAquarium()
@@ -382,7 +474,9 @@ namespace FishingGame.WinForms
                 string marker = caught ? "√ " : "· ";
                 string hidden = fish.IsHidden ? "【隐藏】" : "";
                 string icon = fish.IsHidden ? "秘" : fish.IconSymbol;
-                _collectionList.Items.Add(marker + icon + " " + name + hidden + "  " + fish.Rarity + "  " + fish.MinWeight + "-" + fish.MaxWeight + "kg");
+                string baitTips = "喜好：" + GameData.FindBait(fish.FavoriteBaitId).Name + "/" + GameData.FindBait(fish.AcceptableBaitId).Name;
+                string hookTips = "钩：" + fish.PreferredHookStyle + " 尺寸" + fish.PreferredHookSize;
+                _collectionList.Items.Add(marker + icon + " " + name + hidden + "  " + fish.Rarity + "  " + fish.MinWeight + "-" + fish.MaxWeight + "kg  " + baitTips + "  " + hookTips);
             }
             _collectionList.Items.Add("── 隐藏物品 ──");
             foreach (HiddenItem item in GameData.HiddenItemsByScene[scene.Id])
@@ -413,7 +507,8 @@ namespace FishingGame.WinForms
 
         private void RefreshFishingControls()
         {
-            _castButton.Enabled = !_isFishing;
+            _castButton.Enabled = !_isFishing || _waitingForBite;
+            _castButton.Text = _waitingForBite ? (_biteReady ? "拉杆！" : "等待咬口") : "抛竿";
             _reelControl.IsFishing = _isFishing;
             _reelControl.Tension = _tension;
             _reelControl.Progress = _catchProgress;
@@ -449,15 +544,64 @@ namespace FishingGame.WinForms
             _waterPanel.Scene = item.Value;
         }
 
+        private void CastOrStrike()
+        {
+            if (_waitingForBite)
+            {
+                StrikeLine();
+                return;
+            }
+            CastLine();
+        }
+
         private void CastLine()
         {
-            if (_isFishing) return;
+            if (_isFishing || _waitingForBite) return;
             if (!_state.UnlockedSceneIds.Contains(_currentSceneId))
             {
                 SetStatus("这个场景还没有解锁。");
                 return;
             }
+            if (!GameRules.CanStartCast(_state))
+            {
+                SetStatus("渔具或体力不足：确认饵料、鱼钩和鱼线长度都够。");
+                RefreshAll();
+                return;
+            }
+            if (!GameRules.ConsumeStamina(_state))
+            {
+                SetStatus("体力不足。测试期应为无限体力，如果看到这里说明存档需要刷新。");
+                RefreshAll();
+                return;
+            }
 
+            _waitingForBite = true;
+            _biteReady = false;
+            _biteTicks = 12 + _random.Next(34);
+            _biteWindowTicks = 0;
+            _activeFish = null;
+            _pendingCatch = null;
+            _lastCatch = null;
+            _catchProgress = 0;
+            _tension = 0;
+            _catchLabel.Text = "浮漂入水，等待咬口。水面有明显动静时点击“拉杆！”或按 Space。";
+            SetStatus("正在等鱼咬钩：太早拉杆不会中，太晚饵料会被吃掉。");
+            _fishingTimer.Start();
+            RefreshFishingControls();
+        }
+
+        private void StrikeLine()
+        {
+            if (!_waitingForBite) return;
+            if (!_biteReady)
+            {
+                SetStatus("水面还没真正咬口，先稳住。");
+                return;
+            }
+
+            _waitingForBite = false;
+            _biteReady = false;
+            GameRules.ConsumeBait(_state);
             Rod rod = GameData.FindRod(_state.EquippedRodId);
             _activeItem = GameRules.ChooseHiddenItem(_state, _currentSceneId, _random);
             if (_activeItem != null)
@@ -490,8 +634,15 @@ namespace FishingGame.WinForms
 
         private void FishingTick()
         {
+            if (_waitingForBite)
+            {
+                WaitingTick();
+                return;
+            }
             if (!_isFishing || _activeFish == null) return;
             Rod rod = GameData.FindRod(_state.EquippedRodId);
+            Hook hook = GameData.FindHook(_state.EquippedHookId);
+            FishingLine line = GameData.FindLine(_state.EquippedLineId);
             if (_actionProfile == null)
             {
                 _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
@@ -508,18 +659,63 @@ namespace FishingGame.WinForms
             else
             {
                 _catchProgress -= 2.4 + _activeFish.TensionVolatility / 9.0;
+                double slipChance = HookSlipChance(_activeFish, hook);
+                if (_random.NextDouble() < slipChance)
+                {
+                    FinishFishing(false, "脱钩了。鱼钩尺寸或样式不合适时更容易脱钩。");
+                    return;
+                }
             }
 
             if (_catchProgress < 0) _catchProgress = 0;
+            double lineStress = _tension + _activeFish.RunStrength * 1.15;
+            if (lineStress > line.MaxTension && _random.NextDouble() < LineCutChance(lineStress, line))
+            {
+                double lost = 8 + _random.NextDouble() * 16;
+                GameRules.ApplyLineCut(_state, lost);
+                FinishFishing(false, "切线了！损失鱼钩，并少了约 " + Math.Round(lost, 1) + "m 鱼线。");
+                return;
+            }
             if (_tension <= 2 || _tension >= 98)
             {
-                FinishFishing(false);
+                FinishFishing(false, "张力失控，鱼跑掉了。");
                 return;
             }
             if (_catchProgress >= 100)
             {
                 FinishFishing(true);
                 return;
+            }
+            RefreshFishingControls();
+        }
+
+        private void WaitingTick()
+        {
+            if (_biteTicks > 0)
+            {
+                _biteTicks--;
+                if (_biteTicks == 0)
+                {
+                    _biteReady = true;
+                    _biteWindowTicks = 14 + _random.Next(12);
+                    _catchLabel.Text = "有鱼咬口！现在拉杆！";
+                    SetStatus("咬口出现，立刻点击“拉杆！”或按 Space。");
+                }
+            }
+            else if (_biteReady)
+            {
+                _biteWindowTicks--;
+                if (_biteWindowTicks <= 0)
+                {
+                    _waitingForBite = false;
+                    _biteReady = false;
+                    GameRules.ConsumeBait(_state);
+                    _fishingTimer.Stop();
+                    _catchLabel.Text = "鱼吃掉了饵料，但没有上钩。";
+                    SetStatus("拉杆太晚，损失 1 份饵料。换更合口的饵或更合适的钩会更稳。");
+                    RefreshAll();
+                    return;
+                }
             }
             RefreshFishingControls();
         }
@@ -559,6 +755,12 @@ namespace FishingGame.WinForms
         private void AdjustTension(double amount)
         {
             if (!_isFishing) return;
+            if (amount < 0)
+            {
+                FishingLine line = GameData.FindLine(_state.EquippedLineId);
+                double ratio = _state.EquippedLineLength / Math.Max(1.0, line.MaxLength);
+                amount *= ClampDouble(ratio * 1.6, 0.35, 1.0);
+            }
             _tension += amount;
             if (_tension < 0) _tension = 0;
             if (_tension > 100) _tension = 100;
@@ -567,8 +769,15 @@ namespace FishingGame.WinForms
 
         private void FinishFishing(bool success)
         {
+            FinishFishing(success, "");
+        }
+
+        private void FinishFishing(bool success, string failureMessage)
+        {
             _fishingTimer.Stop();
             _isFishing = false;
+            _waitingForBite = false;
+            _biteReady = false;
             if (success)
             {
                 int bonus = GameRules.RegisterCatch(_state, _pendingCatch);
@@ -589,7 +798,7 @@ namespace FishingGame.WinForms
             else
             {
                 _catchLabel.Text = "鱼逃脱了。";
-                SetStatus("张力失控，鱼跑掉了。换更高控制的鱼竿会轻松些。");
+                SetStatus(string.IsNullOrEmpty(failureMessage) ? "鱼跑掉了。换更高控制的鱼竿会轻松些。" : failureMessage);
             }
             _activeFish = null;
             _activeItem = null;
@@ -653,6 +862,65 @@ namespace FishingGame.WinForms
             RefreshAll();
         }
 
+        private void EquipSelectedTackle()
+        {
+            DisplayItem<object> item = _tackleList.SelectedItem as DisplayItem<object>;
+            if (item == null)
+            {
+                SetStatus("先在渔具背包里选择饵料、鱼钩或鱼线。");
+                return;
+            }
+
+            bool equipped = false;
+            if (item.Value is Bait)
+            {
+                equipped = GameRules.EquipBait(_state, ((Bait)item.Value).Id);
+            }
+            else if (item.Value is Hook)
+            {
+                equipped = GameRules.EquipHook(_state, ((Hook)item.Value).Id);
+            }
+            else if (item.Value is FishingLine)
+            {
+                equipped = GameRules.EquipLine(_state, ((FishingLine)item.Value).Id);
+            }
+            SetStatus(equipped ? "已装备：" + TackleName(item.Value) : "没有库存，无法装备。");
+            RefreshAll();
+        }
+
+        private void BuySelectedTackle()
+        {
+            DisplayItem<object> item = _tackleShopList.SelectedItem as DisplayItem<object>;
+            if (item == null)
+            {
+                SetStatus("先在渔具商店选择要购买的物品。");
+                return;
+            }
+
+            bool bought = false;
+            string name = "";
+            if (item.Value is Bait)
+            {
+                Bait bait = (Bait)item.Value;
+                name = bait.Name;
+                bought = GameRules.BuyBait(_state, bait.Id);
+            }
+            else if (item.Value is Hook)
+            {
+                Hook hook = (Hook)item.Value;
+                name = hook.Name;
+                bought = GameRules.BuyHook(_state, hook.Id);
+            }
+            else if (item.Value is FishingLine)
+            {
+                FishingLine line = (FishingLine)item.Value;
+                name = line.Name;
+                bought = GameRules.BuyLine(_state, line.Id);
+            }
+            SetStatus(bought ? "已购买：" + name : "金币不足，暂时买不起。");
+            RefreshAll();
+        }
+
         private void EquipSelectedRod()
         {
             DisplayItem<Rod> item = _rodList.SelectedItem as DisplayItem<Rod>;
@@ -707,11 +975,41 @@ namespace FishingGame.WinForms
             return item.IconSymbol + " " + item.SpeciesName + hidden + "  " + item.Rarity + "  " + item.WeightGrade + "  " + item.Weight + "kg  售价" + item.SellPrice;
         }
 
+        private static double HookSlipChance(FishSpecies fish, Hook hook)
+        {
+            int sizeDiff = Math.Abs(hook.Size - fish.PreferredHookSize);
+            double pressure = Math.Max(0, fish.RunStrength * 4.5 - hook.HoldStrength) / 220.0;
+            double mismatch = sizeDiff * 0.012;
+            if (hook.Style != fish.PreferredHookStyle) mismatch += 0.01;
+            return ClampDouble(pressure + mismatch, 0.002, 0.12);
+        }
+
+        private static double LineCutChance(double stress, FishingLine line)
+        {
+            double overload = Math.Max(0, stress - line.MaxTension) / 48.0;
+            return ClampDouble(overload * (1.0 - line.CutResistance), 0.015, 0.32);
+        }
+
+        private static string TackleName(object value)
+        {
+            if (value is Bait) return ((Bait)value).Name;
+            if (value is Hook) return ((Hook)value).Name;
+            if (value is FishingLine) return ((FishingLine)value).Name;
+            return "";
+        }
+
         private static int ClampToProgress(double value)
         {
             if (value < 0) return 0;
             if (value > 100) return 100;
             return (int)Math.Round(value);
+        }
+
+        private static double ClampDouble(double value, double min, double max)
+        {
+            if (value < min) return min;
+            if (value > max) return max;
+            return value;
         }
 
         private Label TopLabel()

@@ -21,6 +21,12 @@ namespace FishingGame.Tests
             Run("weight classes control release and sale prices", TestWeightClassesControlSale);
             Run("rarity pricing never inverts within a scene and grade", TestRarityPricingNeverInverts);
             Run("sale prices honor weight and rarity", TestSalePricesHonorWeightAndRarity);
+            Run("tackle catalog supports bait hooks and lines", TestTackleCatalog);
+            Run("bait and hook preferences affect fish selection", TestTacklePreferencesAffectSelection);
+            Run("last missing scene fish gets collection pity", TestLastMissingFishGetsCollectionPity);
+            Run("stamina is infinite during testing", TestTestingStaminaIsInfinite);
+            Run("missed bites consume bait", TestMissedBiteConsumesBait);
+            Run("line cuts shorten line and lose hook", TestLineCutShortensLineAndLosesHook);
             Run("hidden non-fish items exist and sell for coins", TestHiddenItems);
             Run("aquarium capacity is enforced", TestAquariumCapacity);
             Run("ticket income starts at viewing gallery and is daily", TestTicketIncome);
@@ -223,6 +229,90 @@ namespace FishingGame.Tests
             AssertEqual("一般", lighterNormal.WeightGrade, "lighter normal grade");
             AssertEqual("一般", heavierNormal.WeightGrade, "heavier normal grade");
             AssertTrue(heavierNormal.SellPrice > lighterNormal.SellPrice, "normal fish should sell by weight");
+        }
+
+        private static void TestTackleCatalog()
+        {
+            AssertTrue(GameData.Baits.Count >= 8, "bait catalog");
+            AssertTrue(GameData.Hooks.Count >= 6, "hook catalog");
+            AssertTrue(GameData.Lines.Count >= 6, "line catalog");
+
+            HashSet<string> baitIds = new HashSet<string>(GameData.Baits.Select(b => b.Id));
+            foreach (FishSpecies fish in GameData.AllFish)
+            {
+                AssertTrue(baitIds.Contains(fish.FavoriteBaitId), fish.Name + " favorite bait exists");
+                AssertTrue(baitIds.Contains(fish.AcceptableBaitId), fish.Name + " acceptable bait exists");
+                AssertTrue(fish.PreferredHookSize >= 1 && fish.PreferredHookSize <= 5, fish.Name + " hook size preference");
+            }
+
+            GameState state = GameRules.CreateNewGame();
+            AssertTrue(GameRules.GetInventoryCount(state.BaitInventory, state.EquippedBaitId) > 0, "starter bait owned");
+            AssertTrue(GameRules.GetInventoryCount(state.HookInventory, state.EquippedHookId) > 0, "starter hook owned");
+            AssertTrue(state.EquippedLineLength > 20, "starter line equipped");
+        }
+
+        private static void TestTacklePreferencesAffectSelection()
+        {
+            FishSpecies fish = GameData.FishByScene[GameData.Scenes[0].Id].First(f => !f.IsHidden);
+            GameState good = GameRules.CreateNewGame();
+            good.EquippedBaitId = fish.FavoriteBaitId;
+            good.EquippedHookId = GameData.Hooks.OrderBy(h => Math.Abs(h.Size - fish.PreferredHookSize)).First().Id;
+
+            GameState bad = GameRules.CreateNewGame();
+            bad.EquippedBaitId = GameData.Baits.First(b => b.Id != fish.FavoriteBaitId && b.Id != fish.AcceptableBaitId).Id;
+            bad.EquippedHookId = GameData.Hooks.OrderByDescending(h => Math.Abs(h.Size - fish.PreferredHookSize)).First().Id;
+
+            double goodWeight = GameRules.FishAttractionWeight(good, fish);
+            double badWeight = GameRules.FishAttractionWeight(bad, fish);
+            AssertTrue(goodWeight > badWeight * 2.0, "favorite bait and matching hook should strongly improve attraction");
+        }
+
+        private static void TestLastMissingFishGetsCollectionPity()
+        {
+            SceneInfo first = GameData.Scenes[0];
+            List<FishSpecies> regular = GameData.FishByScene[first.Id].Where(f => !f.IsHidden).ToList();
+            FishSpecies missingEpic = regular.Single(f => f.Rarity == "史诗");
+            GameState state = GameRules.CreateNewGame();
+            state.CollectionSpeciesIds = regular.Where(f => f.Id != missingEpic.Id).Select(f => f.Id).ToList();
+            int hits = 0;
+            Random random = new Random(1234);
+            for (int i = 0; i < 120; i++)
+            {
+                FishSpecies chosen = GameRules.ChooseFish(state, first.Id, random);
+                if (chosen.Id == missingEpic.Id)
+                {
+                    hits++;
+                }
+            }
+            AssertTrue(hits >= 25, "last missing epic should not be a one-percent grind");
+        }
+
+        private static void TestTestingStaminaIsInfinite()
+        {
+            GameState state = GameRules.CreateNewGame();
+            state.Stamina = 0;
+            state.InfiniteStamina = true;
+            AssertTrue(GameRules.CanStartCast(state), "infinite stamina allows fishing");
+            AssertTrue(GameRules.ConsumeStamina(state), "consume stamina succeeds");
+            AssertEqual(0, state.Stamina, "infinite stamina does not decrement stored stamina");
+        }
+
+        private static void TestMissedBiteConsumesBait()
+        {
+            GameState state = GameRules.CreateNewGame();
+            int before = GameRules.GetInventoryCount(state.BaitInventory, state.EquippedBaitId);
+            AssertTrue(GameRules.ConsumeBait(state), "bait consumed");
+            AssertEqual(before - 1, GameRules.GetInventoryCount(state.BaitInventory, state.EquippedBaitId), "bait count after miss");
+        }
+
+        private static void TestLineCutShortensLineAndLosesHook()
+        {
+            GameState state = GameRules.CreateNewGame();
+            int hooksBefore = GameRules.GetInventoryCount(state.HookInventory, state.EquippedHookId);
+            double lineBefore = state.EquippedLineLength;
+            GameRules.ApplyLineCut(state, 14.0);
+            AssertTrue(state.EquippedLineLength < lineBefore, "line length shortened");
+            AssertEqual(hooksBefore - 1, GameRules.GetInventoryCount(state.HookInventory, state.EquippedHookId), "hook lost on cut line");
         }
 
         private static void TestHiddenItems()

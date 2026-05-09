@@ -11,12 +11,18 @@ namespace FishingGame.Core
         public static Dictionary<string, List<FishSpecies>> FishByScene { get; private set; }
         public static List<HiddenItem> AllHiddenItems { get; private set; }
         public static Dictionary<string, List<HiddenItem>> HiddenItemsByScene { get; private set; }
+        public static List<Bait> Baits { get; private set; }
+        public static List<Hook> Hooks { get; private set; }
+        public static List<FishingLine> Lines { get; private set; }
         public static List<Rod> Rods { get; private set; }
         public static List<AquariumTier> AquariumTiers { get; private set; }
 
         static GameData()
         {
             Scenes = BuildScenes();
+            Baits = BuildBaits();
+            Hooks = BuildHooks();
+            Lines = BuildLines();
             Rods = BuildRods();
             AquariumTiers = BuildAquariumTiers();
             AllFish = BuildFish();
@@ -38,6 +44,21 @@ namespace FishingGame.Core
         public static Rod FindRod(string id)
         {
             return Rods.First(r => r.Id == id);
+        }
+
+        public static Bait FindBait(string id)
+        {
+            return Baits.First(b => b.Id == id);
+        }
+
+        public static Hook FindHook(string id)
+        {
+            return Hooks.First(h => h.Id == id);
+        }
+
+        public static FishingLine FindLine(string id)
+        {
+            return Lines.First(l => l.Id == id);
         }
 
         private static List<SceneInfo> BuildScenes()
@@ -93,6 +114,11 @@ namespace FishingGame.Core
                 "晴溪", "荷塘", "柳河", "雾湖", "苇泽", "海港",
                 "月湾", "珊瑚", "冰峡", "风暴", "深渊", "龙潮"
             };
+            string[] baitCycle = {
+                "bait-redworm", "bait-corn", "bait-shrimp", "bait-dough",
+                "bait-minnow", "bait-crab", "bait-metal-lure", "bait-squid-lure"
+            };
+            string[] hookStyles = { "单钩", "小钩", "双钩", "圆钩", "巨物钩" };
             string[] hiddenNames = {
                 "晴溪隐鳞", "荷塘睡莲王", "柳河无声鲤", "雾湖镜影鱼",
                 "苇泽暮光鳗", "海港旧锚鲷", "月湾银月鲑", "月湾潮汐魟",
@@ -130,6 +156,10 @@ namespace FishingGame.Core
                         Description = scene.Name + "中常被钓手记录的" + rarity + "鱼。",
                         IsHidden = false,
                         HiddenBaseChance = 0,
+                        FavoriteBaitId = baitCycle[(i + sceneIndex * 2) % baitCycle.Length],
+                        AcceptableBaitId = baitCycle[(i + sceneIndex * 2 + 3) % baitCycle.Length],
+                        PreferredHookSize = Math.Min(5, Math.Max(1, 1 + (i % 5) + RarityDifficultyBonus(rarity) / 12)),
+                        PreferredHookStyle = hookStyles[(i + sceneIndex) % hookStyles.Length],
                         PreferredTension = 34 + (i * 11 + sceneIndex * 5) % 33,
                         TensionWindow = Math.Max(7, 17 - sceneIndex / 2 - RarityDifficultyBonus(rarity) / 8),
                         PullResistance = 2 + (i * 5 + sceneIndex * 2) % 13 + RarityDifficultyBonus(rarity) / 6,
@@ -156,6 +186,10 @@ namespace FishingGame.Core
                         Description = "只在" + scene.Name + "极少现身的隐藏鱼。",
                         IsHidden = true,
                         HiddenBaseChance = Math.Max(0.0005, 0.004 - sceneIndex * 0.00028),
+                        FavoriteBaitId = sceneIndex >= 5 ? "bait-squid-lure" : "bait-minnow",
+                        AcceptableBaitId = sceneIndex >= 7 ? "bait-metal-lure" : "bait-shrimp",
+                        PreferredHookSize = Math.Min(5, 4 + h),
+                        PreferredHookStyle = "巨物钩",
                         PreferredTension = 42 + (sceneIndex * 7 + h * 13) % 24,
                         TensionWindow = Math.Max(5, 10 - sceneIndex / 4),
                         PullResistance = 13 + sceneIndex + h * 3,
@@ -229,6 +263,47 @@ namespace FishingGame.Core
             if (rarity == "史诗") return 15;
             if (rarity == "传说") return 25;
             return 0;
+        }
+
+        private static List<Bait> BuildBaits()
+        {
+            return new List<Bait>
+            {
+                new Bait { Id = "bait-redworm", Name = "红虫饵", Kind = "活饵", Price = 35, PackSize = 12, MinSceneDifficulty = 1, RarityBias = 0, IsLure = false, Description = "浅水小型鱼常见口粮，便宜稳定。" },
+                new Bait { Id = "bait-corn", Name = "甜玉米粒", Kind = "素饵", Price = 42, PackSize = 12, MinSceneDifficulty = 1, RarityBias = 0, IsLure = false, Description = "溪流和池塘鱼喜欢的素饵。" },
+                new Bait { Id = "bait-shrimp", Name = "鲜虾仁", Kind = "荤饵", Price = 70, PackSize = 10, MinSceneDifficulty = 2, RarityBias = 1, IsLure = false, Description = "对肉食鱼有更强吸引。" },
+                new Bait { Id = "bait-dough", Name = "香麦团", Kind = "面饵", Price = 58, PackSize = 14, MinSceneDifficulty = 1, RarityBias = 0, IsLure = false, Description = "泛用型饵料，适合补图鉴。" },
+                new Bait { Id = "bait-minnow", Name = "小鱼活饵", Kind = "活饵", Price = 130, PackSize = 8, MinSceneDifficulty = 4, RarityBias = 2, IsLure = false, Description = "更容易吸引大型或稀有鱼。" },
+                new Bait { Id = "bait-crab", Name = "小蟹饵", Kind = "甲壳饵", Price = 170, PackSize = 8, MinSceneDifficulty = 5, RarityBias = 2, IsLure = false, Description = "湿地、港口和礁区效果更好。" },
+                new Bait { Id = "bait-metal-lure", Name = "银旋路亚", Kind = "路亚", Price = 260, PackSize = 6, MinSceneDifficulty = 6, RarityBias = 3, IsLure = true, Description = "海港以后开始发挥威力的高速路亚。" },
+                new Bait { Id = "bait-squid-lure", Name = "夜光鱿鱼路亚", Kind = "路亚", Price = 420, PackSize = 5, MinSceneDifficulty = 8, RarityBias = 4, IsLure = true, Description = "高端海域、深水和夜钓的强力路亚。" }
+            };
+        }
+
+        private static List<Hook> BuildHooks()
+        {
+            return new List<Hook>
+            {
+                new Hook { Id = "hook-micro", Name = "袖珍小钩", Style = "小钩", Size = 1, Price = 28, PackSize = 10, HoldStrength = 18, Description = "适合小型鱼，大鱼咬上容易脱钩。" },
+                new Hook { Id = "hook-single", Name = "标准单钩", Style = "单钩", Size = 2, Price = 45, PackSize = 10, HoldStrength = 30, Description = "早期泛用钩。" },
+                new Hook { Id = "hook-double", Name = "溪流双钩", Style = "双钩", Size = 2, Price = 78, PackSize = 8, HoldStrength = 34, Description = "提高咬口命中，但不适合巨物。" },
+                new Hook { Id = "hook-circle", Name = "防脱圆钩", Style = "圆钩", Size = 3, Price = 120, PackSize = 8, HoldStrength = 48, Description = "降低脱钩率。" },
+                new Hook { Id = "hook-heavy", Name = "重型单钩", Style = "单钩", Size = 4, Price = 190, PackSize = 6, HoldStrength = 66, Description = "为大型鱼准备。" },
+                new Hook { Id = "hook-giant", Name = "巨物钩", Style = "巨物钩", Size = 5, Price = 320, PackSize = 5, HoldStrength = 88, Description = "只有大鱼愿意咬，小鱼基本不会碰。" }
+            };
+        }
+
+        private static List<FishingLine> BuildLines()
+        {
+            return new List<FishingLine>
+            {
+                new FishingLine { Id = "line-nylon-1", Name = "细尼龙线", Quality = "基础", Price = 60, MaxTension = 72, CutResistance = 0.18, MaxLength = 80, Description = "便宜，容易被大鱼切线。" },
+                new FishingLine { Id = "line-nylon-2", Name = "加粗尼龙线", Quality = "基础", Price = 120, MaxTension = 86, CutResistance = 0.28, MaxLength = 95, Description = "第一、二场景够用。" },
+                new FishingLine { Id = "line-fluoro", Name = "透明碳线", Quality = "精良", Price = 260, MaxTension = 98, CutResistance = 0.42, MaxLength = 110, Description = "更耐磨，适合石岸和港口。" },
+                new FishingLine { Id = "line-braid", Name = "四编PE线", Quality = "稀有", Price = 520, MaxTension = 112, CutResistance = 0.58, MaxLength = 130, Description = "能承受更猛烈的拉扯。" },
+                new FishingLine { Id = "line-deep", Name = "深水八编线", Quality = "史诗", Price = 980, MaxTension = 130, CutResistance = 0.72, MaxLength = 155, Description = "深水巨物专用。" },
+                new FishingLine { Id = "line-dragon", Name = "龙潮复合线", Quality = "传说", Price = 1800, MaxTension = 155, CutResistance = 0.86, MaxLength = 190, Description = "最强线组，切线概率很低。" }
+            };
         }
 
         private static List<Rod> BuildRods()
