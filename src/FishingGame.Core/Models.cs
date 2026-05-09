@@ -36,6 +36,12 @@ namespace FishingGame.Core
         public int ReleaseSensitivity { get; set; }
         public int TensionVolatility { get; set; }
         public int RunStrength { get; set; }
+        public double BaseStamina { get; set; }
+        public double BurstStrength { get; set; }
+        public int BurstFrequency { get; set; }
+        public int BurstDuration { get; set; }
+        public double FatigueResistance { get; set; }
+        public double RecommendedLineStrength { get; set; }
         public string IconSymbol { get; set; }
     }
 
@@ -190,5 +196,28 @@ namespace FishingGame.Core
         public double PullAmount { get; set; }
         public double ReleaseAmount { get; set; }
         public double DriftAmount { get; set; }
+    }
+
+    public class FishingFightState
+    {
+        public double FishStaminaMax { get; set; }
+        public double FishStamina { get; set; }
+        public double FishWeight { get; set; }
+        public double InitialLineDistance { get; set; }
+        public double LineDistance { get; set; }
+        public double LandingDistance { get; set; }
+        public double Tension { get; set; }
+        public double Load { get; set; }
+        public bool IsBursting { get; set; }
+        public int BurstTicks { get; set; }
+        public int BurstCooldownTicks { get; set; }
+        public double RetrieveProgress { get; set; }
+    }
+
+    public class FishingFightTick
+    {
+        public bool LineBroken { get; set; }
+        public bool FishLanded { get; set; }
+        public bool BurstStarted { get; set; }
     }
 }

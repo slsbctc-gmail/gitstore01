@@ -138,6 +138,182 @@ namespace FishingGame.Core
             return ClampDouble(overload * danger * (1.0 - line.CutResistance), 0.004, 0.075);
         }
 
+        public static FishingFightState CreateFightState(FishSpecies fish, Rod rod, FishingLine line, CatchRecord catchRecord)
+        {
+            if (fish == null) return new FishingFightState();
+            if (rod == null) rod = GameData.Rods[0];
+            if (line == null) line = GameData.Lines[0];
+            double weight = catchRecord == null ? Math.Round((fish.MinWeight + fish.MaxWeight) / 2.0, 2) : catchRecord.Weight;
+            double ratio = WeightRatio(fish, weight);
+            int sceneDifficulty = GameData.FindScene(fish.SceneId).Difficulty;
+            double assist = FightAssistMultiplier(sceneDifficulty);
+            double stamina = (fish.BaseStamina + weight * 9.0 + ratio * 22.0 + fish.FatigueResistance * 2.8) * assist;
+            double initialDistance = 8.5 + weight * 1.9 + fish.RunStrength * 0.32 - rod.Control * 0.04;
+            initialDistance *= 0.94 + sceneDifficulty * 0.015;
+            initialDistance *= assist;
+            initialDistance = ClampDouble(initialDistance, 4.5, Math.Max(5.5, line.MaxLength * 0.62));
+            double load = Math.Max(18.0, fish.RunStrength * 1.8 + fish.BurstStrength * 0.25 - rod.Stability * 0.14);
+
+            return new FishingFightState
+            {
+                FishStaminaMax = Math.Round(stamina, 2),
+                FishStamina = Math.Round(stamina, 2),
+                FishWeight = weight,
+                InitialLineDistance = Math.Round(initialDistance, 2),
+                LineDistance = Math.Round(initialDistance, 2),
+                LandingDistance = 0.35,
+                Tension = LoadToTension(load, line),
+                Load = Math.Round(load, 2),
+                IsBursting = false,
+                BurstTicks = 0,
+                BurstCooldownTicks = AdjustedBurstFrequency(fish, sceneDifficulty),
+                RetrieveProgress = 0
+            };
+        }
+
+        public static void ApplyPlayerAction(FishingFightState state, FishSpecies fish, Rod rod, FishingLine line, bool pull)
+        {
+            if (state == null || fish == null) return;
+            if (rod == null) rod = GameData.Rods[0];
+            if (line == null) line = GameData.Lines[0];
+
+            double pressureEdge = PressureAdvantage(fish, rod, line);
+            double linePower = Math.Max(0, (line.MaxTension - fish.RecommendedLineStrength) / 120.0);
+            double fatigueDivisor = 1.0 + fish.FatigueResistance / 18.0;
+            if (pull)
+            {
+                double burstPenalty = state.IsBursting ? 0.52 : 1.0;
+                double retrieve = (0.16 + rod.Power / 140.0 + Math.Max(0, pressureEdge) * 0.32 + linePower * 0.22) * burstPenalty;
+                if (pressureEdge > 0.2)
+                {
+                    retrieve += 0.16;
+                }
+                state.LineDistance = Math.Max(0, state.LineDistance - retrieve);
+
+                double loadGain = 4.5 + fish.RunStrength * 0.38 + fish.BurstStrength * 0.16 - rod.Control * 0.08;
+                if (pressureEdge > 0.1)
+                {
+                    loadGain *= 0.9;
+                }
+                if (linePower > 0)
+                {
+                    loadGain *= ClampDouble(1.0 - linePower * 0.16, 0.72, 1.0);
+                }
+                if (!state.IsBursting)
+                {
+                    loadGain *= 0.72;
+                }
+                state.Load += Math.Max(1.2, loadGain);
+
+                double staminaLoss = (3.8 + rod.Power / 10.0 + Math.Max(0, pressureEdge) * 4.6) / fatigueDivisor;
+                staminaLoss *= state.IsBursting ? 1.22 : 0.95;
+                state.FishStamina = Math.Max(0, state.FishStamina - staminaLoss);
+            }
+            else
+            {
+                double giveLine = 0.12 + fish.ReleaseSensitivity / 130.0;
+                if (state.IsBursting)
+                {
+                    giveLine += fish.BurstStrength / 210.0;
+                }
+                state.LineDistance = Math.Min(line.MaxLength, state.LineDistance + giveLine);
+
+                double unload = 7.0 + rod.Control / 6.5 + line.CutResistance * 18.0;
+                if (state.IsBursting)
+                {
+                    unload *= 1.28;
+                }
+                state.Load = Math.Max(0, state.Load - unload);
+
+                double staminaLoss = (state.IsBursting ? 3.0 : 0.8) + fish.BurstStrength / 28.0;
+                state.FishStamina = Math.Max(0, state.FishStamina - staminaLoss / fatigueDivisor);
+            }
+
+            if (state.FishStamina <= 0)
+            {
+                state.IsBursting = false;
+                state.BurstTicks = 0;
+            }
+            state.Tension = LoadToTension(state.Load, line);
+            state.RetrieveProgress = CalculateRetrieveProgress(state);
+        }
+
+        public static FishingFightTick ResolveFightTick(FishingFightState state, FishSpecies fish, Rod rod, FishingLine line, Random random)
+        {
+            FishingFightTick tick = new FishingFightTick();
+            if (state == null || fish == null) return tick;
+            if (rod == null) rod = GameData.Rods[0];
+            if (line == null) line = GameData.Lines[0];
+            if (random == null) random = new Random();
+
+            int sceneDifficulty = GameData.FindScene(fish.SceneId).Difficulty;
+            double fatigueDivisor = 1.0 + fish.FatigueResistance / 20.0;
+            if (state.FishStamina <= 0)
+            {
+                state.IsBursting = false;
+                state.BurstTicks = 0;
+                state.BurstCooldownTicks = 9999;
+                state.Load = Math.Max(0, state.Load - (4.0 + rod.Stability / 12.0));
+            }
+            else if (state.BurstTicks > 0)
+            {
+                state.IsBursting = true;
+                state.BurstTicks--;
+                state.LineDistance = Math.Min(line.MaxLength, state.LineDistance + 0.08 + fish.BurstStrength / 260.0);
+                state.Load += 5.8 + fish.BurstStrength * BurstPressureMultiplier(sceneDifficulty) * 0.26 - rod.Stability * 0.07;
+                state.FishStamina = Math.Max(0, state.FishStamina - (2.2 + fish.BurstStrength / 24.0) / fatigueDivisor);
+                if (state.BurstTicks <= 0)
+                {
+                    state.IsBursting = false;
+                    state.BurstCooldownTicks = AdjustedBurstFrequency(fish, sceneDifficulty);
+                }
+            }
+            else
+            {
+                state.IsBursting = false;
+                state.BurstCooldownTicks--;
+                state.Load = Math.Max(0, state.Load - (2.8 + rod.Stability / 12.0 + line.CutResistance * 6.0));
+                state.LineDistance = Math.Min(line.MaxLength, state.LineDistance + Math.Max(0.02, fish.RunStrength / 360.0 - rod.Control / 700.0));
+                state.FishStamina = Math.Max(0, state.FishStamina - Math.Max(0.22, (0.7 + fish.RunStrength / 42.0 - rod.Control / 160.0) / fatigueDivisor));
+                if (state.BurstCooldownTicks <= 0 && random.NextDouble() < BurstStartChance(fish, sceneDifficulty))
+                {
+                    state.IsBursting = true;
+                    state.BurstTicks = AdjustedBurstDuration(fish, sceneDifficulty);
+                    tick.BurstStarted = true;
+                }
+            }
+
+            if (state.FishStamina <= 0)
+            {
+                state.IsBursting = false;
+                state.BurstTicks = 0;
+            }
+
+            state.Tension = LoadToTension(state.Load, line);
+            state.RetrieveProgress = CalculateRetrieveProgress(state);
+            double breakChance = LineBreakChance(state.Load, line);
+            if (breakChance > 0 && random.NextDouble() < breakChance)
+            {
+                tick.LineBroken = true;
+            }
+            tick.FishLanded = IsFishLanded(state);
+            return tick;
+        }
+
+        public static bool IsFishLanded(FishingFightState state)
+        {
+            return state != null && state.LineDistance <= state.LandingDistance;
+        }
+
+        public static double LineBreakChance(double load, FishingLine line)
+        {
+            if (line == null) return 0.02;
+            if (load <= line.MaxTension) return 0.0;
+            double overload = (load - line.MaxTension) / Math.Max(1.0, line.MaxTension);
+            double chance = overload * (0.12 + (1.0 - line.CutResistance) * 0.18);
+            return ClampDouble(chance, 0.01, 0.35);
+        }
+
         public static int GetInventoryCount(List<InventoryStack> inventory, string itemId)
         {
             if (inventory == null || string.IsNullOrEmpty(itemId)) return 0;
@@ -210,12 +386,14 @@ namespace FishingGame.Core
 
             Bait bait = GameData.FindBait(state.EquippedBaitId);
             Hook hook = GameData.FindHook(state.EquippedHookId);
+            Rod rod = GameData.FindRod(state.EquippedRodId);
             weight *= BaitAttractionMultiplier(fish, bait);
             weight *= HookAttractionMultiplier(fish, hook);
             if (bait.RarityBias > 0)
             {
                 weight *= 1.0 + bait.RarityBias * RarityTier(fish.Rarity) * 0.08;
             }
+            weight *= 1.0 + Math.Max(0, rod.Luck - 2) * 0.008 * RarityTier(fish.Rarity);
             if (IsLastMissingRegularFish(state, fish))
             {
                 weight *= 60.0;
@@ -266,7 +444,14 @@ namespace FishingGame.Core
 
         public static CatchRecord CreateCatch(FishSpecies fish, Random random)
         {
-            double weight = fish.MinWeight + random.NextDouble() * Math.Max(0.1, fish.MaxWeight - fish.MinWeight);
+            return CreateCatch(fish, GameData.Rods[0], random);
+        }
+
+        public static CatchRecord CreateCatch(FishSpecies fish, Rod rod, Random random)
+        {
+            if (rod == null) rod = GameData.Rods[0];
+            double ratio = RollWeightRatio(fish, rod, random);
+            double weight = fish.MinWeight + ratio * Math.Max(0.1, fish.MaxWeight - fish.MinWeight);
             weight = Math.Round(weight, 2);
             return CreateCatchForWeight(fish, weight);
         }
@@ -665,6 +850,72 @@ namespace FishingGame.Core
         private static double WeightRatio(FishSpecies fish, double weight)
         {
             return ClampDouble((weight - fish.MinWeight) / Math.Max(0.1, fish.MaxWeight - fish.MinWeight), 0, 1);
+        }
+
+        private static double RollWeightRatio(FishSpecies fish, Rod rod, Random random)
+        {
+            if (random == null) random = new Random();
+            double roll = random.NextDouble();
+            double exponent = ClampDouble(1.08 - rod.Luck / 85.0, 0.45, 1.08);
+            return ClampDouble(Math.Pow(roll, exponent), 0, 1);
+        }
+
+        private static double PressureAdvantage(FishSpecies fish, Rod rod, FishingLine line)
+        {
+            double lineEdge = (line.MaxTension - fish.RecommendedLineStrength) / 55.0;
+            double rodEdge = (rod.Power * 1.15 - fish.PullResistance * 2.4 - fish.RunStrength * 1.35) / 34.0;
+            return ClampDouble(lineEdge + rodEdge, -1.2, 1.8);
+        }
+
+        private static double LoadToTension(double load, FishingLine line)
+        {
+            return ClampDouble(16 + load / Math.Max(1.0, line.MaxTension) * 84.0, 0, 100);
+        }
+
+        private static double CalculateRetrieveProgress(FishingFightState state)
+        {
+            if (state == null) return 0;
+            return ClampDouble((1.0 - state.LineDistance / Math.Max(0.1, state.InitialLineDistance)) * 100.0, 0, 100);
+        }
+
+        private static int AdjustedBurstFrequency(FishSpecies fish, int sceneDifficulty)
+        {
+            int bonus = sceneDifficulty <= 4 ? 5 - sceneDifficulty : 0;
+            return fish.BurstFrequency + 2 + bonus * 2;
+        }
+
+        private static int AdjustedBurstDuration(FishSpecies fish, int sceneDifficulty)
+        {
+            int reduction = sceneDifficulty <= 4 ? 1 : 0;
+            return Math.Max(1, fish.BurstDuration - reduction);
+        }
+
+        private static double BurstStartChance(FishSpecies fish, int sceneDifficulty)
+        {
+            double chance = 0.42 + fish.TensionVolatility / 70.0;
+            if (sceneDifficulty <= 4)
+            {
+                chance -= 0.08;
+            }
+            return ClampDouble(chance, 0.2, 0.78);
+        }
+
+        private static double BurstPressureMultiplier(int sceneDifficulty)
+        {
+            if (sceneDifficulty == 1) return 0.72;
+            if (sceneDifficulty == 2) return 0.78;
+            if (sceneDifficulty == 3) return 0.84;
+            if (sceneDifficulty == 4) return 0.92;
+            return 1.0;
+        }
+
+        private static double FightAssistMultiplier(int sceneDifficulty)
+        {
+            if (sceneDifficulty == 1) return 0.72;
+            if (sceneDifficulty == 2) return 0.77;
+            if (sceneDifficulty == 3) return 0.84;
+            if (sceneDifficulty == 4) return 0.91;
+            return 1.0;
         }
 
         private static int ClampInt(int value, int min, int max)

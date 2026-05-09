@@ -59,6 +59,7 @@ namespace FishingGame.WinForms
         private HiddenItem _activeItem;
         private CatchRecord _pendingCatch;
         private CatchRecord _lastCatch;
+        private FishingFightState _fightState;
         private TensionActionProfile _actionProfile;
         private double _tension;
         private double _catchProgress;
@@ -69,6 +70,8 @@ namespace FishingGame.WinForms
         private bool _biteReady;
         private int _biteTicks;
         private int _biteWindowTicks;
+        private int _hookFlashTicks;
+        private int _shakeTicks;
 
         public MainForm()
         {
@@ -476,7 +479,8 @@ namespace FishingGame.WinForms
                 string icon = fish.IsHidden ? "秘" : fish.IconSymbol;
                 string baitTips = "喜好：" + GameData.FindBait(fish.FavoriteBaitId).Name + "/" + GameData.FindBait(fish.AcceptableBaitId).Name;
                 string hookTips = "钩：" + fish.PreferredHookStyle + " 尺寸" + fish.PreferredHookSize;
-                _collectionList.Items.Add(marker + icon + " " + name + hidden + "  " + fish.Rarity + "  " + fish.MinWeight + "-" + fish.MaxWeight + "kg  " + baitTips + "  " + hookTips);
+                string lineTips = "线：" + Math.Round(fish.RecommendedLineStrength) + "+";
+                _collectionList.Items.Add(marker + icon + " " + name + hidden + "  " + fish.Rarity + "  " + fish.MinWeight + "-" + fish.MaxWeight + "kg  " + baitTips + "  " + hookTips + "  " + lineTips);
             }
             _collectionList.Items.Add("── 隐藏物品 ──");
             foreach (HiddenItem item in GameData.HiddenItemsByScene[scene.Id])
@@ -509,12 +513,29 @@ namespace FishingGame.WinForms
         {
             _castButton.Enabled = !_isFishing || _waitingForBite;
             _castButton.Text = _waitingForBite ? (_biteReady ? "拉杆！" : "等待咬口") : "抛竿";
+            if (_isFishing && _activeFish != null && _fightState != null)
+            {
+                FishingLine line = CurrentLineProfile();
+                string mood = _fightState.IsBursting
+                    ? "爆发，先松线"
+                    : (_fightState.FishStamina <= 0 ? "脱力，继续收线" : "平稳，可收线");
+                _catchLabel.Text = _activeFish.Name
+                    + "  体力" + (int)Math.Round(_fightState.FishStamina) + "/" + (int)Math.Round(_fightState.FishStaminaMax)
+                    + "  线长" + Math.Round(_fightState.LineDistance, 1) + "m"
+                    + "  承压" + Math.Round(_fightState.Load, 1) + "/" + Math.Round(line.MaxTension, 0)
+                    + "  " + mood;
+            }
             _reelControl.IsFishing = _isFishing;
             _reelControl.Tension = _tension;
             _reelControl.Progress = _catchProgress;
             _reelControl.SafeLow = _safeLow;
             _reelControl.SafeHigh = _safeHigh;
             _reelControl.ActiveFish = _activeFish;
+            _reelControl.LineDistance = _fightState == null ? 0 : _fightState.LineDistance;
+            _reelControl.Load = _fightState == null ? 0 : _fightState.Load;
+            _reelControl.FishStamina = _fightState == null ? 0 : _fightState.FishStamina;
+            _reelControl.FishStaminaMax = _fightState == null ? 0 : _fightState.FishStaminaMax;
+            _reelControl.HookedPulse = _hookFlashTicks > 0;
             _reelControl.Invalidate();
             _waterPanel.Tension = _tension;
             _waterPanel.Progress = _catchProgress;
@@ -523,6 +544,12 @@ namespace FishingGame.WinForms
             _waterPanel.ActiveFish = _activeFish;
             _waterPanel.LastCatch = _lastCatch;
             _waterPanel.IsFishing = _isFishing;
+            _waterPanel.LineDistance = _fightState == null ? 0 : _fightState.LineDistance;
+            _waterPanel.Load = _fightState == null ? 0 : _fightState.Load;
+            _waterPanel.FishStamina = _fightState == null ? 0 : _fightState.FishStamina;
+            _waterPanel.FishStaminaMax = _fightState == null ? 0 : _fightState.FishStaminaMax;
+            _waterPanel.HookedPulse = _hookFlashTicks > 0;
+            _waterPanel.ShakeTicks = _shakeTicks;
             _waterPanel.Invalidate();
         }
 
@@ -582,11 +609,15 @@ namespace FishingGame.WinForms
             _activeFish = null;
             _pendingCatch = null;
             _lastCatch = null;
+            _fightState = null;
             _catchProgress = 0;
             _tension = 0;
+            _hookFlashTicks = 0;
+            _shakeTicks = 0;
             _catchLabel.Text = "浮漂入水，等待咬口。水面有明显动静时点击“拉杆！”或按 Space。";
             SetStatus("正在等鱼咬钩：太早拉杆不会中，太晚饵料会被吃掉。");
             _fishingTimer.Start();
+            SetStatus("鱼已上钩：目标是把线收回来，只要承压不超线强就不会断。");
             RefreshFishingControls();
         }
 
@@ -595,6 +626,15 @@ namespace FishingGame.WinForms
             if (!_waitingForBite) return;
             if (!_biteReady)
             {
+                _fishingTimer.Stop();
+                _waitingForBite = false;
+                _biteReady = false;
+                _activeFish = null;
+                _activeItem = null;
+                _pendingCatch = null;
+                _fightState = null;
+                RefreshFishingControls();
+                _catchLabel.Text = "空杆。";
                 SetStatus("水面还没真正咬口，先稳住。");
                 return;
             }
@@ -603,6 +643,7 @@ namespace FishingGame.WinForms
             _biteReady = false;
             GameRules.ConsumeBait(_state);
             Rod rod = GameData.FindRod(_state.EquippedRodId);
+            FishingLine line = CurrentLineProfile();
             _activeItem = GameRules.ChooseHiddenItem(_state, _currentSceneId, _random);
             if (_activeItem != null)
             {
@@ -617,15 +658,17 @@ namespace FishingGame.WinForms
             }
 
             _activeFish = GameRules.ChooseFish(_state, _currentSceneId, _random);
-            _pendingCatch = GameRules.CreateCatch(_activeFish, _random);
+            _pendingCatch = GameRules.CreateCatch(_activeFish, rod, _random);
             _lastCatch = null;
-            _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
+            _fightState = GameRules.CreateFightState(_activeFish, rod, line, _pendingCatch);
             TensionWindow window = GameRules.CalculateTensionWindow(_activeFish, rod);
-            _tension = 50;
-            _catchProgress = 0;
+            _tension = _fightState.Tension;
+            _catchProgress = _fightState.RetrieveProgress;
             _safeLow = window.Low;
             _safeHigh = window.High;
             _isFishing = true;
+            _hookFlashTicks = 10;
+            _shakeTicks = 8;
             _catchLabel.Text = "鱼咬钩了！保持张力在 " + _safeLow + "-" + _safeHigh + "。";
             SetStatus("正在钓鱼：顺时针转动卷线器拉线，逆时针放线。Space / S 也可操作。");
             _fishingTimer.Start();
@@ -641,6 +684,29 @@ namespace FishingGame.WinForms
             }
             if (!_isFishing || _activeFish == null) return;
             Rod rod = GameData.FindRod(_state.EquippedRodId);
+            if (_fightState != null)
+            {
+                FishingLine currentLine = CurrentLineProfile();
+                if (_hookFlashTicks > 0) _hookFlashTicks--;
+                if (_shakeTicks > 0) _shakeTicks--;
+                FishingFightTick tick = GameRules.ResolveFightTick(_fightState, _activeFish, rod, currentLine, _random);
+                _tension = _fightState.Tension;
+                _catchProgress = _fightState.RetrieveProgress;
+                if (tick.LineBroken)
+                {
+                    double lost = 8 + _random.NextDouble() * 16;
+                    GameRules.ApplyLineCut(_state, lost);
+                    FinishFishing(false, "切线了！损失鱼钩，并少了线" + Math.Round(lost, 1) + "m 鱼线。");
+                    return;
+                }
+                if (tick.FishLanded)
+                {
+                    FinishFishing(true);
+                    return;
+                }
+                RefreshFishingControls();
+                return;
+            }
             Hook hook = GameData.FindHook(_state.EquippedHookId);
             FishingLine line = GameData.FindLine(_state.EquippedLineId);
             if (_actionProfile == null)
@@ -744,6 +810,20 @@ namespace FishingGame.WinForms
         private void ApplyLineAction(bool pull, bool spinReel)
         {
             if (!_isFishing || _activeFish == null) return;
+            if (_fightState != null)
+            {
+                Rod activeRod = GameData.FindRod(_state.EquippedRodId);
+                FishingLine activeLine = CurrentLineProfile();
+                GameRules.ApplyPlayerAction(_fightState, _activeFish, activeRod, activeLine, pull);
+                _tension = _fightState.Tension;
+                _catchProgress = _fightState.RetrieveProgress;
+                if (spinReel)
+                {
+                    _reelControl.Spin(pull ? 12 : -12);
+                }
+                RefreshFishingControls();
+                return;
+            }
             Rod rod = GameData.FindRod(_state.EquippedRodId);
             TensionActionProfile profile = _actionProfile ?? GameRules.CalculateActionProfile(_activeFish, rod);
             AdjustTension(pull ? profile.PullAmount : -profile.ReleaseAmount);
@@ -751,6 +831,22 @@ namespace FishingGame.WinForms
             {
                 _reelControl.Spin(pull ? 18 : -18);
             }
+        }
+
+        private FishingLine CurrentLineProfile()
+        {
+            FishingLine line = GameData.FindLine(_state.EquippedLineId);
+            return new FishingLine
+            {
+                Id = line.Id,
+                Name = line.Name,
+                Quality = line.Quality,
+                Price = line.Price,
+                MaxTension = line.MaxTension,
+                CutResistance = line.CutResistance,
+                MaxLength = Math.Max(8, Math.Min(line.MaxLength, _state.EquippedLineLength)),
+                Description = line.Description
+            };
         }
 
         private void AdjustTension(double amount)
@@ -804,9 +900,12 @@ namespace FishingGame.WinForms
             _activeFish = null;
             _activeItem = null;
             _pendingCatch = null;
+            _fightState = null;
             _actionProfile = null;
             _tension = 0;
             _catchProgress = 0;
+            _hookFlashTicks = 0;
+            _shakeTicks = 0;
             RefreshAll();
         }
 
@@ -1072,6 +1171,11 @@ namespace FishingGame.WinForms
         public int SafeLow { get; set; }
         public int SafeHigh { get; set; }
         public FishSpecies ActiveFish { get; set; }
+        public double LineDistance { get; set; }
+        public double Load { get; set; }
+        public double FishStamina { get; set; }
+        public double FishStaminaMax { get; set; }
+        public bool HookedPulse { get; set; }
 
         public ReelControl()
         {
@@ -1109,15 +1213,15 @@ namespace FishingGame.WinForms
 
             _reelAngle += delta * 180.0 / Math.PI;
             _dragAccumulator += delta;
-            while (_dragAccumulator >= 0.32)
+            while (_dragAccumulator >= 0.42)
             {
                 OnPullRequested();
-                _dragAccumulator -= 0.32;
+                _dragAccumulator -= 0.42;
             }
-            while (_dragAccumulator <= -0.32)
+            while (_dragAccumulator <= -0.42)
             {
                 OnReleaseRequested();
-                _dragAccumulator += 0.32;
+                _dragAccumulator += 0.42;
             }
             Invalidate();
         }
@@ -1213,8 +1317,8 @@ namespace FishingGame.WinForms
             PointF center = ReelCenter();
             float radius = ReelRadius();
             RectangleF outer = new RectangleF(center.X - radius, center.Y - radius, radius * 2, radius * 2);
-            Color rim = IsFishing ? Color.FromArgb(76, 91, 99) : Color.FromArgb(136, 144, 146);
-            Color inner = IsFishing ? Color.FromArgb(54, 65, 72) : Color.FromArgb(170, 176, 178);
+            Color rim = HookedPulse ? Color.FromArgb(215, 146, 68) : (IsFishing ? Color.FromArgb(76, 91, 99) : Color.FromArgb(136, 144, 146));
+            Color inner = HookedPulse ? Color.FromArgb(118, 74, 38) : (IsFishing ? Color.FromArgb(54, 65, 72) : Color.FromArgb(170, 176, 178));
 
             using (GraphicsPath path = new GraphicsPath())
             {
@@ -1233,7 +1337,7 @@ namespace FishingGame.WinForms
 
             using (Pen spoke = new Pen(Color.FromArgb(210, 238, 242, 240), 5F))
             using (Brush hub = new SolidBrush(inner))
-            using (Brush knob = new SolidBrush(IsFishing ? Color.FromArgb(231, 111, 81) : Color.FromArgb(150, 150, 150)))
+            using (Brush knob = new SolidBrush(HookedPulse ? Color.FromArgb(246, 189, 96) : (IsFishing ? Color.FromArgb(231, 111, 81) : Color.FromArgb(150, 150, 150))))
             using (Brush labelBrush = new SolidBrush(Color.FromArgb(42, 55, 59)))
             using (Brush pullBrush = new SolidBrush(Color.FromArgb(194, 73, 58)))
             using (Brush releaseBrush = new SolidBrush(Color.FromArgb(48, 115, 176)))
@@ -1355,6 +1459,12 @@ namespace FishingGame.WinForms
         public double Progress { get; set; }
         public int SafeLow { get; set; }
         public int SafeHigh { get; set; }
+        public double LineDistance { get; set; }
+        public double Load { get; set; }
+        public double FishStamina { get; set; }
+        public double FishStaminaMax { get; set; }
+        public bool HookedPulse { get; set; }
+        public int ShakeTicks { get; set; }
         public CatchRecord LastCatch { get; set; }
 
         public WaterPanel()
@@ -1370,6 +1480,14 @@ namespace FishingGame.WinForms
             g.SmoothingMode = SmoothingMode.AntiAlias;
             Rectangle bounds = ClientRectangle;
             if (bounds.Width <= 0 || bounds.Height <= 0) return;
+            GraphicsState originalState = g.Save();
+            if (IsFishing && ShakeTicks > 0)
+            {
+                int offset = Math.Min(4, ShakeTicks);
+                int dx = (ShakeTicks % 2 == 0 ? -1 : 1) * offset;
+                int dy = ((ShakeTicks + 1) % 3 - 1) * Math.Max(1, offset / 2);
+                g.TranslateTransform(dx, dy);
+            }
 
             Color top = Scene == null ? Color.FromArgb(147, 213, 255) : ParseColor(Scene.PaletteTop);
             Color bottom = Scene == null ? Color.FromArgb(47, 155, 216) : ParseColor(Scene.PaletteBottom);
@@ -1384,10 +1502,15 @@ namespace FishingGame.WinForms
             DrawFishShadows(g, bounds);
             DrawDock(g, bounds);
             DrawFishingState(g, bounds);
+            if (IsFishing)
+            {
+                DrawFightOverlay(g, bounds);
+            }
             if (!IsFishing && LastCatch != null)
             {
                 DrawCatchShowcase(g, bounds, LastCatch);
             }
+            g.Restore(originalState);
         }
 
         private void DrawScenery(Graphics g, Rectangle bounds)
@@ -1800,6 +1923,41 @@ namespace FishingGame.WinForms
                     ? "目标鱼影：" + (ActiveFish.IsHidden ? "异常稀有" : ActiveFish.Rarity) + "  " + ActiveFish.Name
                     : "选择钓点后抛竿，等待水面动静。";
                 g.DrawString(line, small, textBrush, 28, 58);
+            }
+        }
+
+        private void DrawFightOverlay(Graphics g, Rectangle bounds)
+        {
+            Rectangle card = new Rectangle(24, Math.Max(88, bounds.Height - 128), Math.Min(360, bounds.Width - 48), 84);
+            using (GraphicsPath path = RoundedRectangle(card, 14))
+            using (Brush fill = new SolidBrush(Color.FromArgb(132, 10, 24, 32)))
+            using (Pen edge = new Pen(Color.FromArgb(160, 255, 255, 255), 1.5F))
+            using (Brush text = new SolidBrush(Color.White))
+            using (Brush muted = new SolidBrush(Color.FromArgb(216, 226, 232)))
+            using (Brush barBack = new SolidBrush(Color.FromArgb(90, 255, 255, 255)))
+            using (Brush staminaBar = new SolidBrush(HookedPulse ? Color.FromArgb(255, 226, 122) : Color.FromArgb(97, 214, 138)))
+            using (Brush loadBar = new SolidBrush(Color.FromArgb(242, 120, 92)))
+            using (Font title = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold))
+            using (Font small = new Font("Microsoft YaHei UI", 8.5F, FontStyle.Regular))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(edge, path);
+
+                string status = ActiveFish == null
+                    ? "等待鱼讯"
+                    : (FishStamina <= 0 ? "鱼已脱力，继续收线" : (HookedPulse ? "刚中鱼，注意爆发" : "观察挣扎节奏"));
+                g.DrawString(status, title, text, card.Left + 14, card.Top + 10);
+                g.DrawString("线长 " + Math.Round(LineDistance, 1) + "m    承压 " + Math.Round(Load, 1), small, muted, card.Left + 14, card.Top + 30);
+
+                Rectangle staminaBack = new Rectangle(card.Left + 14, card.Top + 50, card.Width - 28, 10);
+                Rectangle loadBack = new Rectangle(card.Left + 14, card.Top + 66, card.Width - 28, 8);
+                g.FillRectangle(barBack, staminaBack);
+                g.FillRectangle(barBack, loadBack);
+
+                double staminaRatio = FishStaminaMax <= 0 ? 0 : Math.Max(0, Math.Min(1, FishStamina / FishStaminaMax));
+                double loadRatio = Math.Max(0, Math.Min(1, Tension / 100.0));
+                g.FillRectangle(staminaBar, staminaBack.Left, staminaBack.Top, (int)Math.Round(staminaBack.Width * staminaRatio), staminaBack.Height);
+                g.FillRectangle(loadBar, loadBack.Left, loadBack.Top, (int)Math.Round(loadBack.Width * loadRatio), loadBack.Height);
             }
         }
 

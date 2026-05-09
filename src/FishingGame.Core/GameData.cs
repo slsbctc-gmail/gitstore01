@@ -166,6 +166,12 @@ namespace FishingGame.Core
                         ReleaseSensitivity = 2 + (i * 7 + sceneIndex) % 14,
                         TensionVolatility = 2 + (i * 3 + sceneIndex * 2) % 13 + RarityDifficultyBonus(rarity) / 5,
                         RunStrength = 2 + (i * 9 + sceneIndex) % 14 + scene.Difficulty / 2,
+                        BaseStamina = Math.Round(22 + scene.Difficulty * 6.5 + (i % 6) * 3 + RarityDifficultyBonus(rarity) * 1.4, 2),
+                        BurstStrength = Math.Round(16 + scene.Difficulty * 3.8 + (i % 5) * 2.2 + RarityDifficultyBonus(rarity) * 0.9, 2),
+                        BurstFrequency = Math.Max(6, 20 - scene.Difficulty - (i % 4)),
+                        BurstDuration = 2 + (i + sceneIndex) % 4,
+                        FatigueResistance = Math.Round(1.2 + scene.Difficulty * 0.45 + (i % 5) * 0.3 + RarityDifficultyBonus(rarity) * 0.08, 2),
+                        RecommendedLineStrength = Math.Round(50 + scene.Difficulty * 5.4 + RarityDifficultyBonus(rarity) * 1.5 + (i % 7) * 2.8, 2),
                         IconSymbol = "鱼"
                     });
                 }
@@ -196,6 +202,12 @@ namespace FishingGame.Core
                         ReleaseSensitivity = 8 + sceneIndex % 8 + h * 2,
                         TensionVolatility = 14 + sceneIndex + h * 3,
                         RunStrength = 15 + sceneIndex + h * 4,
+                        BaseStamina = Math.Round(70d + scene.Difficulty * 11 + h * 14, 2),
+                        BurstStrength = Math.Round(34 + scene.Difficulty * 5.5 + h * 8, 2),
+                        BurstFrequency = Math.Max(5, 12 - scene.Difficulty / 3 - h),
+                        BurstDuration = 4 + sceneIndex % 3 + h,
+                        FatigueResistance = Math.Round(4.5 + scene.Difficulty * 0.9 + h * 1.2, 2),
+                        RecommendedLineStrength = Math.Round(92 + scene.Difficulty * 6.8 + h * 12, 2),
                         IconSymbol = "秘"
                     });
                 }

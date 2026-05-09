@@ -27,6 +27,11 @@ namespace FishingGame.Tests
             Run("collection pity only applies to early scenes", TestCollectionPityOnlyAppliesToEarlyScenes);
             Run("starter tension actions are not too sensitive", TestStarterTensionActionsAreNotTooSensitive);
             Run("safe tension prevents slip and line cut", TestSafeTensionPreventsSlipAndLineCut);
+            Run("heavier fish have more stamina", TestHeavierFishHaveMoreStamina);
+            Run("fish with zero stamina still need to be reeled in", TestExhaustedFishStillNeedsRetrieve);
+            Run("strong line can overpower smaller fish", TestStrongLineCanOverpowerSmallFish);
+            Run("line only breaks above rated load", TestLineOnlyBreaksAboveRatedLoad);
+            Run("luck improves trophy bias", TestLuckImprovesTrophyBias);
             Run("stamina is infinite during testing", TestTestingStaminaIsInfinite);
             Run("missed bites consume bait", TestMissedBiteConsumesBait);
             Run("line cuts shorten line and lose hook", TestLineCutShortensLineAndLosesHook);
@@ -341,6 +346,88 @@ namespace FishingGame.Tests
 
             double dangerTension = Math.Min(100, window.High + 18);
             AssertTrue(GameRules.LineCutChance(fish, line, dangerTension, window) < 0.08, "line cut is not a constant per-tick punishment");
+        }
+
+        private static void TestHeavierFishHaveMoreStamina()
+        {
+            FishSpecies fish = GameData.AllFish.First(f => !f.IsHidden && f.MaxWeight - f.MinWeight > 1.4);
+            Rod rod = GameData.Rods[0];
+            FishingLine line = GameData.Lines[0];
+            CatchRecord lightCatch = GameRules.CreateCatchForWeight(fish, fish.MinWeight + 0.05);
+            CatchRecord heavyCatch = GameRules.CreateCatchForWeight(fish, fish.MaxWeight - 0.05);
+
+            FishingFightState lightFight = GameRules.CreateFightState(fish, rod, line, lightCatch);
+            FishingFightState heavyFight = GameRules.CreateFightState(fish, rod, line, heavyCatch);
+
+            AssertTrue(heavyFight.FishStaminaMax > lightFight.FishStaminaMax, "heavier catch should have more stamina");
+            AssertTrue(heavyFight.FishStamina > lightFight.FishStamina, "heavier catch should start with more stamina");
+        }
+
+        private static void TestExhaustedFishStillNeedsRetrieve()
+        {
+            FishSpecies fish = GameData.FishByScene[GameData.Scenes[0].Id].First(f => !f.IsHidden);
+            CatchRecord catchRecord = GameRules.CreateCatchForWeight(fish, fish.MaxWeight - 0.08);
+            FishingFightState fight = GameRules.CreateFightState(fish, GameData.Rods[0], GameData.Lines[0], catchRecord);
+
+            fight.FishStamina = 0;
+            fight.LineDistance = 6.0;
+            AssertFalse(GameRules.IsFishLanded(fight), "zero stamina alone should not land the fish");
+
+            fight.LineDistance = fight.LandingDistance * 0.5;
+            AssertTrue(GameRules.IsFishLanded(fight), "fish lands after the line is fully retrieved");
+        }
+
+        private static void TestStrongLineCanOverpowerSmallFish()
+        {
+            FishSpecies fish = GameData.FishByScene[GameData.Scenes[0].Id]
+                .Where(f => !f.IsHidden)
+                .OrderBy(f => f.MaxWeight)
+                .First();
+            Rod strongRod = GameData.Rods.OrderByDescending(r => r.Power).First();
+            FishingLine weakLine = GameData.Lines.OrderBy(l => l.MaxTension).First();
+            FishingLine strongLine = GameData.Lines.OrderByDescending(l => l.MaxTension).First();
+            CatchRecord catchRecord = GameRules.CreateCatchForWeight(fish, fish.MinWeight + 0.08);
+
+            FishingFightState weakFight = GameRules.CreateFightState(fish, strongRod, weakLine, catchRecord);
+            FishingFightState strongFight = GameRules.CreateFightState(fish, strongRod, strongLine, catchRecord);
+
+            weakFight.IsBursting = false;
+            strongFight.IsBursting = false;
+            weakFight.LineDistance = 9.0;
+            strongFight.LineDistance = 9.0;
+
+            GameRules.ApplyPlayerAction(weakFight, fish, strongRod, weakLine, true);
+            GameRules.ApplyPlayerAction(strongFight, fish, strongRod, strongLine, true);
+
+            AssertTrue(strongFight.LineDistance < weakFight.LineDistance, "stronger line should enable harder pull on small fish");
+        }
+
+        private static void TestLineOnlyBreaksAboveRatedLoad()
+        {
+            FishingLine line = GameData.Lines[0];
+            AssertEqual(0.0, GameRules.LineBreakChance(line.MaxTension * 0.92, line), "line should not break below rating");
+            AssertTrue(GameRules.LineBreakChance(line.MaxTension * 1.18, line) > 0.0, "line should become breakable above rating");
+        }
+
+        private static void TestLuckImprovesTrophyBias()
+        {
+            FishSpecies fish = GameData.AllFish.First(f => !f.IsHidden && f.MaxWeight - f.MinWeight > 1.0);
+            Rod starterRod = GameData.Rods.OrderBy(r => r.Luck).First();
+            Rod luckyRod = GameData.Rods.OrderByDescending(r => r.Luck).First();
+            Random starterRandom = new Random(4321);
+            Random luckyRandom = new Random(4321);
+            int starterTrophies = 0;
+            int luckyTrophies = 0;
+
+            for (int i = 0; i < 240; i++)
+            {
+                CatchRecord starterCatch = GameRules.CreateCatch(fish, starterRod, starterRandom);
+                CatchRecord luckyCatch = GameRules.CreateCatch(fish, luckyRod, luckyRandom);
+                if (starterCatch.WeightGrade == "极品") starterTrophies++;
+                if (luckyCatch.WeightGrade == "极品") luckyTrophies++;
+            }
+
+            AssertTrue(luckyTrophies > starterTrophies, "luck should raise trophy-rate outcomes");
         }
 
         private static void TestTestingStaminaIsInfinite()
