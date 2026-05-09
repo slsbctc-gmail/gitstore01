@@ -97,15 +97,45 @@ namespace FishingGame.Core
 
         public static TensionActionProfile CalculateActionProfile(FishSpecies fish, Rod rod)
         {
-            double pull = 8.0 + rod.Power / 18.0 - fish.PullResistance * 0.42;
-            double release = 7.0 + rod.Control / 24.0 + fish.ReleaseSensitivity * 0.38;
-            double drift = 1.0 + fish.TensionVolatility / 8.0 + fish.RunStrength / 18.0 - rod.Stability / 55.0;
+            int sceneDifficulty = GameData.FindScene(fish.SceneId).Difficulty;
+            double pull = 4.2 + rod.Power / 34.0 - fish.PullResistance * 0.18;
+            double release = 4.4 + rod.Control / 38.0 + fish.ReleaseSensitivity * 0.14;
+            double drift = 0.55 + fish.TensionVolatility / 14.0 + fish.RunStrength / 36.0 - rod.Stability / 90.0;
+            if (sceneDifficulty <= 4)
+            {
+                drift *= 0.75;
+            }
             return new TensionActionProfile
             {
-                PullAmount = ClampDouble(pull, 3.0, 24.0),
-                ReleaseAmount = ClampDouble(release, 4.0, 25.0),
-                DriftAmount = ClampDouble(drift, 0.35, 8.0)
+                PullAmount = ClampDouble(pull, 2.0, 13.0),
+                ReleaseAmount = ClampDouble(release, 2.2, 14.0),
+                DriftAmount = ClampDouble(drift, 0.18, 4.2)
             };
+        }
+
+        public static double HookSlipChance(FishSpecies fish, Hook hook, double tension, TensionWindow window)
+        {
+            if (fish == null || hook == null || window == null) return 0.02;
+            if (tension >= window.Low && tension <= window.High) return 0.0;
+
+            double distance = tension < window.Low ? window.Low - tension : tension - window.High;
+            int sizeDiff = Math.Abs(hook.Size - fish.PreferredHookSize);
+            double pressure = Math.Max(0, fish.RunStrength * 3.2 - hook.HoldStrength) / 420.0;
+            double mismatch = sizeDiff * 0.006;
+            if (hook.Style != fish.PreferredHookStyle) mismatch += 0.006;
+            return ClampDouble(distance / 900.0 + pressure + mismatch, 0.001, 0.055);
+        }
+
+        public static double LineCutChance(FishSpecies fish, FishingLine line, double tension, TensionWindow window)
+        {
+            if (fish == null || line == null || window == null) return 0.02;
+            if (tension <= window.High) return 0.0;
+
+            double lineStress = tension + fish.RunStrength * 0.9;
+            if (lineStress <= line.MaxTension) return 0.0;
+            double overload = (lineStress - line.MaxTension) / 90.0;
+            double danger = Math.Max(0, tension - window.High) / 120.0;
+            return ClampDouble(overload * danger * (1.0 - line.CutResistance), 0.004, 0.075);
         }
 
         public static int GetInventoryCount(List<InventoryStack> inventory, string itemId)
@@ -568,6 +598,7 @@ namespace FishingGame.Core
         private static bool IsLastMissingRegularFish(GameState state, FishSpecies fish)
         {
             if (fish.IsHidden || state.CollectionSpeciesIds.Contains(fish.Id)) return false;
+            if (GameData.FindScene(fish.SceneId).Difficulty > 4) return false;
             List<FishSpecies> missing = GameData.FishByScene[fish.SceneId]
                 .Where(f => !f.IsHidden && !state.CollectionSpeciesIds.Contains(f.Id))
                 .ToList();

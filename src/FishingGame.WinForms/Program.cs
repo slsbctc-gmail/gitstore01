@@ -647,8 +647,9 @@ namespace FishingGame.WinForms
             {
                 _actionProfile = GameRules.CalculateActionProfile(_activeFish, rod);
             }
-            double fishPull = _activeFish.RunStrength / 15.0;
-            double control = rod.Control / 95.0;
+            TensionWindow activeWindow = new TensionWindow { Low = _safeLow, High = _safeHigh };
+            double fishPull = _activeFish.RunStrength / 35.0;
+            double control = rod.Control / 140.0;
             double drift = (_random.NextDouble() - 0.43) * _actionProfile.DriftAmount + fishPull - control;
             _tension += drift;
 
@@ -659,7 +660,7 @@ namespace FishingGame.WinForms
             else
             {
                 _catchProgress -= 2.4 + _activeFish.TensionVolatility / 9.0;
-                double slipChance = HookSlipChance(_activeFish, hook);
+                double slipChance = GameRules.HookSlipChance(_activeFish, hook, _tension, activeWindow);
                 if (_random.NextDouble() < slipChance)
                 {
                     FinishFishing(false, "脱钩了。鱼钩尺寸或样式不合适时更容易脱钩。");
@@ -668,8 +669,8 @@ namespace FishingGame.WinForms
             }
 
             if (_catchProgress < 0) _catchProgress = 0;
-            double lineStress = _tension + _activeFish.RunStrength * 1.15;
-            if (lineStress > line.MaxTension && _random.NextDouble() < LineCutChance(lineStress, line))
+            double cutChance = GameRules.LineCutChance(_activeFish, line, _tension, activeWindow);
+            if (cutChance > 0 && _random.NextDouble() < cutChance)
             {
                 double lost = 8 + _random.NextDouble() * 16;
                 GameRules.ApplyLineCut(_state, lost);
@@ -975,21 +976,6 @@ namespace FishingGame.WinForms
             return item.IconSymbol + " " + item.SpeciesName + hidden + "  " + item.Rarity + "  " + item.WeightGrade + "  " + item.Weight + "kg  售价" + item.SellPrice;
         }
 
-        private static double HookSlipChance(FishSpecies fish, Hook hook)
-        {
-            int sizeDiff = Math.Abs(hook.Size - fish.PreferredHookSize);
-            double pressure = Math.Max(0, fish.RunStrength * 4.5 - hook.HoldStrength) / 220.0;
-            double mismatch = sizeDiff * 0.012;
-            if (hook.Style != fish.PreferredHookStyle) mismatch += 0.01;
-            return ClampDouble(pressure + mismatch, 0.002, 0.12);
-        }
-
-        private static double LineCutChance(double stress, FishingLine line)
-        {
-            double overload = Math.Max(0, stress - line.MaxTension) / 48.0;
-            return ClampDouble(overload * (1.0 - line.CutResistance), 0.015, 0.32);
-        }
-
         private static string TackleName(object value)
         {
             if (value is Bait) return ((Bait)value).Name;
@@ -1123,15 +1109,15 @@ namespace FishingGame.WinForms
 
             _reelAngle += delta * 180.0 / Math.PI;
             _dragAccumulator += delta;
-            while (_dragAccumulator >= 0.18)
+            while (_dragAccumulator >= 0.32)
             {
                 OnPullRequested();
-                _dragAccumulator -= 0.18;
+                _dragAccumulator -= 0.32;
             }
-            while (_dragAccumulator <= -0.18)
+            while (_dragAccumulator <= -0.32)
             {
                 OnReleaseRequested();
-                _dragAccumulator += 0.18;
+                _dragAccumulator += 0.32;
             }
             Invalidate();
         }

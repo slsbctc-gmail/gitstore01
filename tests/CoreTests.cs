@@ -24,6 +24,9 @@ namespace FishingGame.Tests
             Run("tackle catalog supports bait hooks and lines", TestTackleCatalog);
             Run("bait and hook preferences affect fish selection", TestTacklePreferencesAffectSelection);
             Run("last missing scene fish gets collection pity", TestLastMissingFishGetsCollectionPity);
+            Run("collection pity only applies to early scenes", TestCollectionPityOnlyAppliesToEarlyScenes);
+            Run("starter tension actions are not too sensitive", TestStarterTensionActionsAreNotTooSensitive);
+            Run("safe tension prevents slip and line cut", TestSafeTensionPreventsSlipAndLineCut);
             Run("stamina is infinite during testing", TestTestingStaminaIsInfinite);
             Run("missed bites consume bait", TestMissedBiteConsumesBait);
             Run("line cuts shorten line and lose hook", TestLineCutShortensLineAndLosesHook);
@@ -285,6 +288,59 @@ namespace FishingGame.Tests
                 }
             }
             AssertTrue(hits >= 25, "last missing epic should not be a one-percent grind");
+        }
+
+        private static void TestCollectionPityOnlyAppliesToEarlyScenes()
+        {
+            SceneInfo early = GameData.Scenes[3];
+            SceneInfo later = GameData.Scenes[4];
+            FishSpecies earlyTarget = GameData.FishByScene[early.Id].First(f => !f.IsHidden);
+            FishSpecies laterTarget = GameData.FishByScene[later.Id].First(f => !f.IsHidden);
+
+            GameState earlyBase = GameRules.CreateNewGame();
+            earlyBase.EquippedBaitId = earlyTarget.FavoriteBaitId;
+            earlyBase.EquippedHookId = GameData.Hooks.OrderBy(h => Math.Abs(h.Size - earlyTarget.PreferredHookSize)).First().Id;
+            GameState earlyPity = GameRules.CreateNewGame();
+            earlyPity.EquippedBaitId = earlyBase.EquippedBaitId;
+            earlyPity.EquippedHookId = earlyBase.EquippedHookId;
+            earlyPity.CollectionSpeciesIds = GameData.FishByScene[early.Id].Where(f => !f.IsHidden && f.Id != earlyTarget.Id).Select(f => f.Id).ToList();
+
+            GameState laterBase = GameRules.CreateNewGame();
+            laterBase.EquippedBaitId = laterTarget.FavoriteBaitId;
+            laterBase.EquippedHookId = GameData.Hooks.OrderBy(h => Math.Abs(h.Size - laterTarget.PreferredHookSize)).First().Id;
+            GameState laterPity = GameRules.CreateNewGame();
+            laterPity.EquippedBaitId = laterBase.EquippedBaitId;
+            laterPity.EquippedHookId = laterBase.EquippedHookId;
+            laterPity.CollectionSpeciesIds = GameData.FishByScene[later.Id].Where(f => !f.IsHidden && f.Id != laterTarget.Id).Select(f => f.Id).ToList();
+
+            double earlyBoost = GameRules.FishAttractionWeight(earlyPity, earlyTarget) / GameRules.FishAttractionWeight(earlyBase, earlyTarget);
+            double laterBoost = GameRules.FishAttractionWeight(laterPity, laterTarget) / GameRules.FishAttractionWeight(laterBase, laterTarget);
+            AssertTrue(earlyBoost > 30.0, "early scenes get last-missing pity");
+            AssertTrue(laterBoost < 5.0, "scene five and later remain true random apart from normal missing bonus");
+        }
+
+        private static void TestStarterTensionActionsAreNotTooSensitive()
+        {
+            Rod starter = GameData.Rods[0];
+            FishSpecies firstSceneFish = GameData.FishByScene[GameData.Scenes[0].Id].First(f => !f.IsHidden);
+            TensionActionProfile profile = GameRules.CalculateActionProfile(firstSceneFish, starter);
+            AssertTrue(profile.PullAmount <= 5.5, "starter pull should not jump to the limit");
+            AssertTrue(profile.ReleaseAmount <= 6.2, "starter release should not jump to the limit");
+            AssertTrue(profile.DriftAmount <= 2.2, "early fish drift should be readable");
+        }
+
+        private static void TestSafeTensionPreventsSlipAndLineCut()
+        {
+            FishSpecies fish = GameData.FishByScene[GameData.Scenes[0].Id].OrderByDescending(f => f.RunStrength).First(f => !f.IsHidden);
+            Hook hook = GameData.Hooks.OrderBy(h => Math.Abs(h.Size - fish.PreferredHookSize)).First();
+            FishingLine line = GameData.Lines[0];
+            TensionWindow window = GameRules.CalculateTensionWindow(fish, GameData.Rods[0]);
+            double safeTension = (window.Low + window.High) / 2.0;
+            AssertEqual(0.0, GameRules.HookSlipChance(fish, hook, safeTension, window), "no hook slip inside safe window");
+            AssertEqual(0.0, GameRules.LineCutChance(fish, line, safeTension, window), "no line cut inside safe window");
+
+            double dangerTension = Math.Min(100, window.High + 18);
+            AssertTrue(GameRules.LineCutChance(fish, line, dangerTension, window) < 0.08, "line cut is not a constant per-tick punishment");
         }
 
         private static void TestTestingStaminaIsInfinite()
